@@ -19,11 +19,17 @@
 #include "errno.h"
 #include "mom_func.h"
 #include "mom_job_cleanup.h"
+#include "complete_req.hpp"
+#include "json/json.h"
 
 int server_down;
 int called_open_socket = 0;
 int called_fork_me = 0;
+bool check_rur = true;
 
+char         mom_alias[PBS_MAXHOSTNAME + 1];
+
+std::list<job *>              alljobs_list;
 std::vector<exiting_job_info> exiting_job_list;
 
 const char *PMOMCommand[] =
@@ -700,7 +706,7 @@ int DIS_tcp_wflush(struct tcp_chan *chan)
   return 0;
   }
 
-int im_compose(struct tcp_chan *chan, char *jobid, char *cookie, int command, tm_event_t event, tm_task_id taskid)
+int im_compose(struct tcp_chan *chan, char *jobid, const char *cookie, int command, tm_event_t event, tm_task_id taskid)
   {
   return 0;
   }
@@ -804,7 +810,7 @@ int kill_job(job *pjob, int sig, const char *killer_id_name, const char *why_kil
   return 0;
   }
 
-int mom_open_socket_to_jobs_server(job *pjob, const char *caller_id, void *(*message_handler)(void *))
+int mom_open_socket_to_jobs_server_with_retries(job *pjob, const char *caller_id, void *(*message_handler)(void *), int retry_limit)
   {
   called_open_socket++;
   int sock = 1;
@@ -953,11 +959,11 @@ struct batch_request *alloc_br(int type)
   return br;
   }
 
-void encode_used(job *pjob, int i, std::stringstream *output, list_link *l)
+void encode_used(job *pjob, int i, Json::Value *output, list_link *l)
   {
   }
 
-void encode_flagged_attrs(job *pjob, int i, std::stringstream *output, list_link *l)
+void encode_flagged_attrs(job *pjob, int i, Json::Value *output, list_link *l)
   {
   }
 
@@ -1304,10 +1310,9 @@ void mom_job_purge(job *pjob)
   return;
   }
 
-struct passwd *check_pwd(job *pjob)
+bool check_pwd(job *pjob)
   {
-  struct passwd *respass = NULL;
-  return respass;
+  return false;
   }
 
 unsigned long gettime(resource *pres)
@@ -1347,7 +1352,7 @@ int add_to_resend_things(resend_momcomm *mc)
   return(0);
   }
 
-im_compose_info *create_compose_reply_info(char *jobid, char *cookie, hnodent *np, int command, tm_event_t event, tm_task_id taskid)
+im_compose_info *create_compose_reply_info(const char *jobid, const char *cookie, hnodent *np, int command, tm_event_t event, tm_task_id taskid, const char *data)
   {
   return(NULL);
   }
@@ -1365,3 +1370,51 @@ bool am_i_mother_superior(const job &pjob)
 
 void get_energy_used(job *pjob)
   {}
+
+int init_nvidia_nvml(unsigned int device_count) 
+  {
+  return(0);
+  }
+
+int check_nvidia_setup()
+  {
+  return(0);
+  }
+
+int shut_nvidia_nvml() 
+  {
+  return(0);
+  }
+  
+int encode_complete_req(
+    
+  pbs_attribute *attr,
+  tlist_head    *phead,
+  const char    *atname,
+  const char    *rsname,
+  int            mode,
+  int            perm)
+
+  {
+  return(0);
+  }
+
+int complete_req::get_task_stats(unsigned int &req_index, std::vector<int> &task_index,
+                                 std::vector<unsigned long> &cput_used,
+                                 std::vector<unsigned long long> &mem_used, const char *hostname)
+  {
+  return(0);
+  }
+
+void set_jobs_substate(job *pjob, int substate)
+  {
+  pjob->ji_qs.ji_substate = substate;
+  }
+
+int send_back_std_and_staged_files(job *pjob, int exit_value)
+  {
+  return(PBSE_NONE);
+  }
+
+
+task::~task() {}

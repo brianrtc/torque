@@ -8,6 +8,9 @@
 #include <md5.h> /* MD5_CTX */
 #include <sys/socket.h> /* sockaddr_in, sockaddr */
 #include <pwd.h> /* gid_t, uid_t */
+#include <string> /* std::string */
+#include <sys/types.h>
+#include <grp.h>
 
 #include "attribute.h" /* attribute_def, pbs_attribute, svrattrl */
 #include "resource.h" /* resource_def */
@@ -20,11 +23,25 @@
 #include "mom_mach.h" /* startjob_rtn */
 #include "mom_func.h" /* var_table */
 #include "pbs_nodes.h"
+#include "complete_req.hpp"
 #ifdef PENABLE_LINUX26_CPUSETS
 #include "pbs_cpuset.h"
 #include "node_internals.hpp"
 #endif
 
+#include "complete_req.hpp"
+#include "req.hpp"
+#include "allocation.hpp"
+
+std::string cg_memory_path;
+std::string cg_cpuacct_path;
+std::string cg_cpuset_path;
+std::string cg_devices_path;
+
+#define LDAP_RETRIES 5
+
+// Sensing and control variables
+unsigned linux_time = 0;
 int  send_ms_called;
 int  send_sisters_called;
 int  num_contacted;
@@ -32,6 +49,11 @@ bool am_ms = false;
 bool bad_pwd = false;
 bool fail_init_groups = false;
 bool fail_site_grp_check = false;
+bool addr_fail = false;
+
+
+bool force_file_overwrite;
+int use_nvidia_gpu = TRUE;
 int logged_event;
 int MOMCudaVisibleDevices;
 int exec_with_exec;
@@ -76,6 +98,11 @@ int    attempttomakedir = 0;
 int EXTPWDRETRY = 3;
 char log_buffer[LOG_BUF_SIZE];
 char mom_alias[1024];
+int ac_read_amount;
+int ac_errno;
+int job_saved;
+int task_saved;
+std::string presetup_prologue;
 
 #ifdef NUMA_SUPPORT
 nodeboard node_boards[MAX_NODE_BOARDS];
@@ -86,8 +113,11 @@ int       num_node_boards = 10;
 node_internals internal_layout;
 #endif
 
+void free_pwnam(struct passwd *pwdp, char *buf)
+  {}
 
-
+void free_grname(struct group *grp, char *buf)
+  {}
 
 int diswcs (struct tcp_chan *chan, const char *value,size_t nchars) 
   { return 0; }
@@ -96,7 +126,7 @@ int DIS_tcp_wflush (struct tcp_chan *chan) { return 0; }
 int move_to_job_cpuset(pid_t, job *) { return 0; }
 int diswsi(tcp_chan *chan, int i) { return 0; }
 int encode_DIS_svrattrl(tcp_chan *chan, svrattrl *s) { return 0; }
-int im_compose(tcp_chan *chan, char *arg2, char *a3, int a4, int a5, unsigned int a6) { return 0; }
+int im_compose(tcp_chan *chan, char *arg2, const char *a3, int a4, int a5, unsigned int a6) { return 0; }
 int create_alps_reservation(char *a1, char *a2, char *a3, char *a4, char *a5, long long a6, int a7, int a8, int a9, char **a10,const char *a11, std::string& cray_frequency) { return 0; }
 int mom_close_poll(void)
   {
@@ -130,6 +160,7 @@ char *arst_string(const char *str, pbs_attribute *pattr)
 
 int job_save(job *pjob, int updatetype, int mom_port)
   {
+  job_saved++;
   return(0);
   }
 
@@ -395,8 +426,7 @@ int site_mom_chkuser(job *pjob)
 
 resource_def *find_resc_def(resource_def *rscdf, const char *name, int limit)
   {
-  fprintf(stderr, "The call to find_resc_def needs to be mocked!!\n");
-  exit(1);
+  return(NULL);
   }
 
 int mom_checkpoint_job_is_checkpointable(job *pjob)
@@ -405,26 +435,126 @@ int mom_checkpoint_job_is_checkpointable(job *pjob)
   exit(1);
   }
 
-struct passwd * getpwnam_ext(char *user_name)
+struct passwd *getpwnam_wrapper(
+
+  char       **user_buffer,
+  const char *user_name)
+
+  {
+  struct passwd *pwent;
+  char  *buf;
+  long   bufsize;
+  struct passwd *result;
+  int rc;
+
+  *user_buffer = NULL;
+  bufsize = sysconf(_SC_GETPW_R_SIZE_MAX);
+  if (bufsize == -1)
+    bufsize = 8196;
+
+  buf = (char *)malloc(bufsize);
+  if (buf == NULL)
+    {
+    log_event(PBSEVENT_JOB, PBS_EVENTCLASS_JOB, __func__, "failed to allocate memory");
+    return(NULL);
+    }
+
+  pwent = (struct passwd *)calloc(1, sizeof(struct passwd));
+  if (pwent == NULL)
+    {
+    log_event(PBSEVENT_JOB, PBS_EVENTCLASS_JOB, __func__, "could not allocate passwd structure");
+    return(NULL);
+    }
+
+  rc = getpwnam_r(user_name, pwent, buf, bufsize, &result);
+  if (rc)
+    {
+    sprintf(buf, "getpwnam_r failed: %d", rc);
+    log_event(PBSEVENT_JOB, PBS_EVENTCLASS_JOB, __func__, buf);
+    return (NULL);
+    }
+  
+  *user_buffer = buf;
+  return(pwent);
+  }
+
+
+struct group *getgrnam_ext( 
+
+  char **grp_buf,
+  char *grp_name) /* I */
+
+  {
+  struct group *grp;
+  char  *buf;
+  long   bufsize;
+  struct group *result;
+  int rc;
+
+  if (grp_name == NULL)
+    return(NULL);
+
+  bufsize = sysconf(_SC_GETGR_R_SIZE_MAX);
+  if (bufsize == -1)
+    bufsize = 8196;
+
+  buf = (char *)malloc(bufsize);
+  if (buf == NULL)
+    {
+    log_event(PBSEVENT_JOB, PBS_EVENTCLASS_JOB, __func__, "failed to allocate memory");
+    return(NULL);
+    }
+
+  grp = (struct group *)calloc(1, sizeof(struct group));
+  if (grp == NULL)
+    {
+    log_event(PBSEVENT_JOB, PBS_EVENTCLASS_JOB, __func__, "could not allocate passwd structure");
+    return(NULL);
+    }
+
+  rc = getgrnam_r(grp_name, grp, buf, bufsize, &result);
+  if (rc)
+    {
+    /* See if a number was passed in instead of a name */
+    if (isdigit(grp_name[0]))
+      {
+      rc = getgrgid_r(atoi(grp_name), grp, buf, bufsize, &result);
+      if (rc == 0)
+        return(grp);
+      }
+ 
+    sprintf(buf, "getgrnam_r failed: %d", rc);
+    log_event(PBSEVENT_JOB, PBS_EVENTCLASS_JOB, __func__, buf);
+    return (NULL);
+    }
+
+  return(grp);
+  } /* END getgrnam_ext() */
+
+
+
+struct passwd *getpwnam_ext( 
+
+  char **user_buf,
+  char *user_name) /* I */
+
   {
   static int ct = 1;
-  static passwd pwd;
+  passwd *pwd = (passwd *)calloc(1, sizeof(*pwd));
 
-  if (ct == 1)
-    {
-    pwd.pw_dir = strdup("/home/dbeer");
-    pwd.pw_gid = 6;
-    pwd.pw_name = strdup("dbeer");
-    }
+  pwd->pw_dir = strdup("/home/dbeer");
+  pwd->pw_gid = 6;
+  pwd->pw_name = strdup("dbeer");
 
   if ((ct++ % 2 == 0) &&
       (bad_pwd == false))
     {
-    return(&pwd);
+    return(pwd);
     }
 
   return(NULL);
-  }
+  } /* END getpwnam_ext() */
+
 
 int tcp_connect_sockaddr(struct sockaddr *sa, size_t sa_size, bool use_log)
   {
@@ -476,8 +606,8 @@ char *rcvttype(int sock)
 
 int task_save(task *ptask)
   {
-  fprintf(stderr, "The call to task_save needs to be mocked!!\n");
-  exit(1);
+  task_saved++;
+  return(0);
   }
 
 char * set_shell(job *pjob, struct passwd *pwdp)
@@ -494,8 +624,13 @@ char *pbs_strerror(int err)
 
 resource *find_resc_entry(pbs_attribute *pattr, resource_def *rscdf)
   {
-  fprintf(stderr, "The call to find_resc_entry needs to be mocked!!\n");
-  exit(1);
+  static resource mem;
+  
+  memset(&mem, 0, sizeof(mem));
+  mem.rs_value.at_val.at_size.atsv_num = 4;
+  mem.rs_value.at_val.at_size.atsv_shift = 30;
+  
+  return(&mem);
   }
 
 int im_compose(int stream, char *jobid, char *cookie, int command, tm_event_t event, tm_task_id taskid)
@@ -534,7 +669,7 @@ int timeval_subtract(struct timeval *result, struct timeval *x, struct timeval *
   exit(1);
   }
 
-int get_hostaddr_hostent_af(int *local_errno, char *hostname, unsigned short *af_family, char **host_addr, int *host_addr_len)
+int get_hostaddr_hostent_af(int *local_errno, const char *hostname, unsigned short *af_family, char **host_addr, int *host_addr_len)
   {
   fprintf(stderr, "The call to get_hostaddr_hostent_af needs to be mocked!!\n");
   exit(1);
@@ -549,7 +684,8 @@ ssize_t write_ac_socket(int fd, const void *buf, ssize_t count)
 
 ssize_t read_ac_socket(int fd, void *buf, ssize_t count)
   {
-  return(0);
+  errno = ac_errno;
+  return(ac_read_amount);
   }
 
 proc_stat_t *get_proc_stat(int pid)
@@ -567,9 +703,18 @@ int destroy_alps_reservation(char *reservation_id, char *apbasil_path, char *apb
   return(0);
   }
 
-int pbs_getaddrinfo(const char *hostname, struct addrinfo *bob, struct addrinfo **)
+int pbs_getaddrinfo(const char *hostname, struct addrinfo *bob, struct addrinfo **ppAddrInfoOut)
   {
-  return -1;
+  if (addr_fail == true)
+    return(-1);
+  else
+    {
+    char buf[MAXLINE];
+    gethostname(buf, sizeof(buf));
+    getaddrinfo(buf, NULL, NULL, ppAddrInfoOut);
+
+    return(0);
+    }
   }
 
 bool am_i_mother_superior(const job &pjob)
@@ -577,7 +722,7 @@ bool am_i_mother_superior(const job &pjob)
   return(am_ms);
   }
 
-int ctnodes(char *epec)
+int ctnodes(const char *epec)
   {
   fprintf(stderr, "The call to append_link needs to be mocked!!\n");
   exit(1);
@@ -622,7 +767,7 @@ void numa_node::recover_reservation(
 
 #endif
 
-void translate_range_string_to_vector(const char *range, std::vector<int> &indices)
+int translate_range_string_to_vector(const char *range, std::vector<int> &indices)
   {
   indices.push_back(0);
   indices.push_back(1);
@@ -634,6 +779,8 @@ void translate_range_string_to_vector(const char *range, std::vector<int> &indic
   indices.push_back(7);
   indices.push_back(8);
   indices.push_back(9);
+
+  return(PBSE_NONE);
   }
 
 int initgroups_ext(const char *username, gid_t gr_id)
@@ -648,6 +795,39 @@ job *mom_find_job(const char *jobid)
   {
   return(NULL);
   }
+
+void capture_until_close_character(
+
+  char        **start,
+  std::string  &storage,
+  char          end)
+
+  {
+  if ((start == NULL) ||
+      (*start == NULL))
+    return;
+
+  char *val = *start;
+  char *ptr = strchr(val, end);
+
+  // Make sure we found a close quote and this wasn't an empty string
+  if ((ptr != NULL) &&
+       (ptr != val))
+    {
+    storage = val;
+    storage.erase(ptr - val);
+    *start = ptr + 1; // add 1 to move past the character
+    }
+  } // capture_until_close_character()
+
+void translate_vector_to_range_string(
+
+  std::string            &range_string,
+  const std::vector<int> &indices)
+
+  {
+  } // END translate_vector_to_range_string()
+
 
 
 char * csv_find_string(const char *csv_str, const char *search_str)
@@ -667,4 +847,254 @@ int csv_length(const char *csv_str)
   fprintf(stderr, "The call to csv_length to be mocked!!\n");
   exit(1);
   }
+
+#ifdef PENABLE_LINUX_CGROUPS
+Machine this_node;
+
+int trq_cg_add_process_to_cgroup(std::string &path, const char *suffix, int gpu)
+  {
+  return(PBSE_NONE);
+  }
+
+int init_torque_cgroups()
+  {
+  return(PBSE_NONE);
+  }
+
+int trq_cg_add_devices_to_cgroup(job *pjob)
+  {
+  return(PBSE_NONE);
+  }
+
+int trq_cg_add_process_to_cgroup_accts(pid_t job_pid ) 
+  {
+  return(PBSE_NONE);
+  }
+
+int trq_cg_add_process_to_cgroup(std::string& cgroup_path, pid_t job_pid, pid_t new_pid) 
+  {
+  return(PBSE_NONE);
+  }
+
+int trq_cg_set_resident_memory_limit(pid_t pid, unsigned long memory_limit)
+  {
+  return(PBSE_NONE);
+  }
+
+int trq_cg_set_swap_memory_limit(pid_t pid, unsigned long memory_limit)
+  {
+  return(PBSE_NONE);
+  }
+
+int trq_cg_create_cpuset_cgroup(job*, int)
+  {
+  return(PBSE_NONE);
+  }
+
+int trq_cg_add_process_to_all_cgroups(const char *job_id, int pid)
+  {
+  return(PBSE_NONE);
+  }
+
+int trq_cg_add_process_to_cgroup(const char *job_id, int pid)
+  {
+  return(PBSE_NONE);
+  }
+
+int trq_cg_reserve_cgroup(job *pjob)
+  {
+  return(PBSE_NONE);
+  }
+
+int trq_cg_create_all_cgroups(job *pjob)
+  {
+  return(PBSE_NONE);
+  }
+
+int trq_cg_add_process_to_cgroup_accts(const char *job_id, int pid)
+  {
+  return(PBSE_NONE);
+  }
+
+int trq_cg_set_resident_memory_limit(const char *job_id, unsigned long memory_limit)
+  {
+  return(PBSE_NONE);
+  }
+
+int trq_cg_set_swap_memory_limit(const char *job_id, unsigned long limit)
+  {
+  return(PBSE_NONE);
+  }
+
+int trq_cg_add_process_to_task_cgroup(
+  string     &cgroup_path,
+  const char *job_id,
+  const unsigned int req_index,
+  const unsigned int task_index,
+  pid_t       new_pid)
+  {
+  return(PBSE_NONE);
+  }
+
+int trq_cg_set_task_swap_memory_limit(
+  const char    *job_id,
+  unsigned int   req_index,
+  unsigned int   task_index,
+  unsigned long long  memory_limit)
+  {
+  return(PBSE_NONE);
+  }
+
+int trq_cg_set_swap_memory_limit(
+  const char    *job_id,
+  unsigned long long  memory_limit)
+  {
+  return(PBSE_NONE);
+  }
+
+int trq_cg_set_task_resident_memory_limit(
+  const char    *job_id,
+  unsigned int   req_index,
+  unsigned int   task_index,
+  unsigned long long memory_limit)
+  {
+  return(PBSE_NONE);
+  }
+
+int trq_cg_set_resident_memory_limit(
+  const char    *job_id,
+  unsigned long long  memory_limit)
+  {
+  return(PBSE_NONE);
+  }
+
+Machine::Machine() {}
+Machine::~Machine() {}
+
+hwloc_uint64_t Machine::getTotalMemory() const
+  {
+  return(this->totalMemory);
+  }
+
+PCI_Device::~PCI_Device() {}
+Socket::~Socket() {}
+Chip::~Chip() {}
+Core::~Core() {}
+
+#endif
+
+
+int is_whitespace(
+
+  char c)
+
+  {
+  if ((c == ' ')  ||
+      (c == '\n') ||
+      (c == '\t') ||
+      (c == '\r') ||
+      (c == '\f'))
+    return(TRUE);
+  else
+    return(FALSE);
+  } /* END is_whitespace */
+
+
+
+void move_past_whitespace(
+
+  char **str)
+
+  {
+  if ((str == NULL) ||
+      (*str == NULL))
+    return;
+
+  char *current = *str;
+
+  while (is_whitespace(*current) == TRUE)
+    current++;
+
+  *str = current;
+  } // END move_past_whitespace()
+
+bool task_hosts_match(const char *one, const char *two)
+  {
+  return(true);
+  }
+    
+int complete_req::req_count() const
+  {
+  return(0);
+  }
+
+unsigned long long complete_req::get_swap_memory_for_this_host( const std::string &hostname) const
+  {
+  return(0);
+  }
+
+unsigned long long complete_req::get_swap_per_task( unsigned int req_index)
+  {
+  return(0);
+  }
+
+unsigned long long complete_req::get_memory_per_task(unsigned int req_index)
+  {
+  return(0);
+  }
+
+int complete_req::get_req_and_task_index(
+  const int rank, 
+  unsigned int &req_index, 
+  unsigned int &task_index)
+
+  {
+  return(0);
+  }
+
+unsigned long long complete_req::get_memory_for_this_host(
+  const std::string &hostname) const
+  {
+  return(0);
+  }
+
+struct passwd *get_password_entry_by_uid(
+
+  char **user_buf,
+  uid_t uid)
+
+  {
+  return(NULL);
+  }
+
+bool have_incompatible_dash_l_resource(
+    
+    pbs_attribute *pattr)
+
+  {
+  return(false);
+  }
+
+
+unsigned int complete_req::get_num_reqs()
+  {
+  return(1);
+  }
+
+req &complete_req::get_req(int i)
+  {
+  static req r;
+
+  return(r);
+  }
+
+#include "../../src/lib/Libattr/req.cpp"
+#include "../../src/lib/Libutils/allocation.cpp"
+
+#ifdef ENABLE_PMIX
+void register_jobs_nspace(job *pjob, pjobexec_t *TJE) {}
+#endif
+
+int setup_gpus_for_job(job *pjob)
+  {return(0);}
 

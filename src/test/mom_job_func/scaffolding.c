@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <pwd.h> /* gid_t, uid_t */
+#include <pbs_config.h>
 
 #include "attribute.h" /* attribute_def, pbs_attribute */
 #include "list_link.h" /* tlist_head, list_link */
@@ -12,7 +13,10 @@
 #include "server_limits.h" /* pbs_net_t. Also defined in net_connect.h */
 #include "pbs_job.h" /* job_file_delete_info */
 #include "threadpool.h"
+#include "machine.hpp"
+#include "mom_func.h"
 
+std::list<job *> alljobs_list;
 threadpool_t *request_pool;
 int is_login_node = 0;
 char *apbasil_path = NULL;
@@ -33,15 +37,47 @@ char log_buffer[LOG_BUF_SIZE]; /* pbs_log.c */
 bool exit_called = false;
 int svr_resc_size = 0; /* resc_def_all.c */
 resource_def *svr_resc_def = NULL; /* resc_def_all.c */
+pthread_mutex_t *delete_job_files_mutex;
+time_t time_now;
+int    saved_job;
+
+#ifdef ENABLE_PMIX
+char  mom_alias[PBS_MAXHOSTNAME + 1];
+
+char *get_job_envvar(
+
+  job  *pjob,     /* I */
+  const char *variable) /* I */
+
+  {
+  return(NULL);
+  }
+
+int TTmpDirName(
+
+  job  *pjob,   /* I */
+  char *tmpdir, /* O */
+  int   tmpdir_size)
+
+  {
+  return(0);
+  }
+
+void translate_vector_to_range_string(
+
+  std::string            &range_string,
+  const std::vector<int> &indices)
+
+  {
+  }
+#endif
 
 
 void clear_attr(pbs_attribute *pattr, attribute_def *pdef)
   {
-  fprintf(stderr, "The call to clear_attr needs to be mocked!!\n");
-  exit(1);
   }
 
-pbs_net_t get_hostaddr(int *local_errno, char *hostname)
+pbs_net_t get_hostaddr(int *local_errno, const char *hostname)
   {
   fprintf(stderr, "The call to get_hostaddr needs to be mocked!!\n");
   exit(1);
@@ -49,14 +85,10 @@ pbs_net_t get_hostaddr(int *local_errno, char *hostname)
 
 void delete_link(struct list_link *old)
   {
-  fprintf(stderr, "The call to delete_link needs to be mocked!!\n");
-  exit(1);
   }
 
 void log_record(int eventtype, int objclass, const char *objname, const char *text)
   {
-  fprintf(stderr, "The call to log_record needs to be mocked!!\n");
-  exit(1);
   }
 
 int enqueue_threadpool_request(void *(*func)(void *),void *arg, threadpool_t *tp)
@@ -67,14 +99,10 @@ int enqueue_threadpool_request(void *(*func)(void *),void *arg, threadpool_t *tp
 
 void log_ext(int errnum, const char *routine, const char *text, int severity)
   {
-  fprintf(stderr, "The call to log_ext needs to be mocked!!\n");
-  exit(1);
   }
 
 void MOMCheckRestart(void)
   {
-  fprintf(stderr, "The call to MOMCheckRestart needs to be mocked!!\n");
-  exit(1);
   }
 
 int client_to_svr(pbs_net_t hostaddr, unsigned int port, int local_port, char *EMsg)
@@ -85,32 +113,23 @@ int client_to_svr(pbs_net_t hostaddr, unsigned int port, int local_port, char *E
 
 void *get_next(list_link pl, char *file, int line)
   {
-  fprintf(stderr, "The call to get_next needs to be mocked!!\n");
-  exit(1);
+  return(NULL);
   }
 
 void nodes_free(job *pj)
   {
-  fprintf(stderr, "The call to nodes_free needs to be mocked!!\n");
-  exit(1);
   }
 
 void mom_checkpoint_delete_files(job_file_delete_info *jfdi)
   {
-  fprintf(stderr, "The call to mom_checkpoint_delete_files needs to be mocked!!\n");
-  exit(1);
   }
 
 void log_err(int errnum, const char *routine, const char *text)
   {
-  fprintf(stderr, "The call to log_err needs to be mocked!!\n");
-  exit(1);
   }
 
 void close_conn(int sd, int has_mutex)
   {
-  fprintf(stderr, "The call to close_conn needs to be mocked!!\n");
-  exit(1);
   }
 
 void DIS_tcp_cleanup(struct tcp_chan *chan) {}
@@ -142,3 +161,69 @@ char *pbse_to_txt(int err)
   exit(1);
   }
 
+void *trq_cg_remove_process_from_accts(void *vp)  
+  {
+  return(PBSE_NONE);
+  }
+
+void log_event(
+
+  int         eventtype,
+  int         objclass,
+  const char *objname,
+  const char *text)
+  
+  {
+  return;
+  }
+
+void Machine::free_job_allocation(const char *job_id)
+  {
+  }
+
+Machine::Machine() {}
+Machine::~Machine() {}
+
+PCI_Device::~PCI_Device() {}
+
+Socket::~Socket() {}
+
+Chip::~Chip() {}
+
+Core::~Core() {}
+
+Machine          this_node;
+
+void trq_cg_delete_job_cgroups(
+        
+  const char *job_id,
+  bool        successfully_created)
+
+  {
+  }
+
+int unlink_ext(const char *filename, int retry_limit)
+  {
+  return(0);
+  }
+
+int rmdir_ext(const char *dirname, int retry_limit)
+  {
+  return(0);
+  }
+
+void send_update_soon()
+  {
+  return;
+  }
+
+int job_save(
+
+  job *pjob,  /* pointer to job structure */
+  int  updatetype, /* 0=quick, 1=full, 2=new     */
+  int  mom_port)   /* if 0 ignore otherwise append to end of job name. this is for multi-mom mode */
+
+  {
+  saved_job++;
+  return(0);
+  }

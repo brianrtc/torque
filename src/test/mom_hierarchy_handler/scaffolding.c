@@ -12,10 +12,11 @@ all_nodes                allnodes;
 char                    *path_mom_hierarchy = NULL;
 threadpool_t             *async_pool = NULL;
 extern mom_hierarchy_t  *mh;
-int                     LOGLEVEL;
+int                     LOGLEVEL = 10;
 bool                    exit_called = false;
 threadpool_t           *task_pool;
 id_map                  node_mapper;
+int			lock_node_count = 0;
 
 execution_slot_tracker::execution_slot_tracker(){}
 
@@ -94,8 +95,7 @@ int unlock_node(
 int nodeId = 0;
 int create_partial_pbs_node(char *nodename, unsigned long addr, int perms)
   {
-  pbsnode *pnode = (pbsnode *)calloc(1,sizeof(pbsnode));
-  pnode->nd_name = strdup(nodename);
+  pbsnode *pnode = new pbsnode(nodename, NULL, true);
   pnode->nd_id = nodeId++;
   pnode->nd_hierarchy_level = 500;
   allnodes.insert(pnode,nodename,true);
@@ -306,4 +306,47 @@ const char *id_map::get_name(int id)
   return(NULL);
   }
 
+pbsnode::pbsnode(const char *hostname, u_long *addrs, bool skip_lookup)
 
+  {
+  this->nd_name = hostname;
+  }
+
+pbsnode::pbsnode() {}
+pbsnode::~pbsnode() {}
+
+int pbsnode::unlock_node(const char *id, const char *msg, int level)
+  {
+  return(0);
+  }
+
+int pbsnode::lock_node(const char *id, const char *msg, int level)
+  {
+  lock_node_count++;
+  return(0);
+  }
+
+const char *pbsnode::get_name() const
+  {
+  return(this->nd_name.c_str());
+  }
+
+int insert_node(all_nodes *an, struct pbsnode *pnode)
+  {
+  if ((an == NULL) || (pnode == NULL) || (pnode->get_name() == NULL)) return 0;
+
+  an->lock();
+  an->insert(pnode, pnode->get_name());
+  an->unlock();
+  return(PBSE_NONE);
+  }
+
+int remove_node(all_nodes *an, struct pbsnode *pnode)
+  {
+  if ((an == NULL) || (pnode == NULL) || (pnode->get_name() == NULL)) return 0;
+
+  an->lock();
+  an->remove(pnode->get_name());
+  an->unlock();
+  return(PBSE_NONE);
+  }

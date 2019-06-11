@@ -7,7 +7,6 @@
 #include "pbs_job.h" /* job */
 #include "array.h" /* job_array */
 #include "mutex_mgr.hpp"
-#include "dynamic_string.h"
 #include "net_connect.h" /* pbs_net_t */
 #include "user_info.h"
 #include "server.h" /* server */
@@ -15,6 +14,7 @@
 #include "threadpool.h"
 #include "id_map.hpp"
 #include "completed_jobs_map.h"
+#include "pbs_nodes.h"
 
 const char *text_name              = "text";
 const char *PJobSubState[10];
@@ -42,77 +42,43 @@ char *path_jobinfo_log;
 pthread_mutex_t *svr_do_schedule_mutex;
 pthread_mutex_t *listener_command_mutex;
 threadpool_t    *task_pool;
+bool ghost_array_recovery = false;
+bool cray_enabled = false;
 
 completed_jobs_map_class completed_jobs_map;
+
+int aborted;
 
 
 ssize_t read_nonblocking_socket(int fd, void *buf, ssize_t count)
   {
-  fprintf(stderr, "The call to read_nonblocking_socket needs to be mocked!!\n");
-  exit(1);
+  return(PBSE_NONE);
   }
 
 int save_attr(struct attribute_def *padef, struct pbs_attribute *pattr, int numattr, int fds, char *buf, size_t *buf_remaining, size_t buf_size)
   {
-  fprintf(stderr, "The call to save_attr needs to be mocked!!\n");
-  exit(1);
+  return(PBSE_NONE);
   }
 
 ssize_t write_nonblocking_socket(int fd, const void *buf, ssize_t count)
   {
-  fprintf(stderr, "The call to write_nonblocking_socket needs to be mocked!!\n");
-  exit(1);
+  return(PBSE_NONE);
   }
 
-job_array *get_array(char *id)
+job_array *get_array(const char *id)
   {
-  fprintf(stderr, "The call to get_array needs to be mocked!!\n");
-  exit(1);
+  return(NULL);
   }
 
 int job_qs_upgrade(job *pj, int fds, char *path, int version)
   {
-  fprintf(stderr, "The call to job_qs_upgrade needs to be mocked!!\n");
-  exit(1);
+  return(PBSE_NONE);
   }
 
-/*
-int recov_attr(int fd, void *parent, struct attribute_def *padef, struct pbs_attribute *pattr, int limit, int unknown, int do_actions)
-  {
-  fprintf(stderr, "The call to recov_attr needs to be mocked!!\n");
-  exit(1);
-  }
-
-int job_abt(struct job **pjobp, const char *text)
-  {
-  fprintf(stderr, "The call to job_abt needs to be mocked!!\n");
-  exit(1);
-  }
-
-void job_free(job *pj, int use_recycle)
-  {
-  fprintf(stderr, "The call to job_free needs to be mocked!!\n");
-  exit(1);
-  }
-
-job *job_alloc(void)
-  {
-  fprintf(stderr, "The call to job_alloc needs to be mocked!!\n");
-  exit(1);
-  }
- 
- int save_struct(char *pobj, unsigned int objsize, int fds, char *buf_ptr, size_t *space_remaining, size_t buf_size)
-  {
-  fprintf(stderr, "The call to save_struct needs to be mocked!!\n");
-  exit(1);
-  }
-
-*/
 
 void array_get_parent_id(char *job_id, char *parent_id)
   {
-  fprintf(stderr, "The call to array_get_parent_id needs to be mocked!!\n");
-  exit(1);
+  strcpy(parent_id, "4[].napali");
   }
 
 int lock_ss()
@@ -175,20 +141,17 @@ mutex_mgr::~mutex_mgr() {}
 
 int svr_setjobstate(job *pjob, int newstate, int newsubstate, int  has_queue_mute)
   {
-  fprintf(stderr, "The call to svr_setjobstate needs to be mocked!!\n");
-  exit(1);
+  return(PBSE_NONE);
   }
 
-int svr_enquejob(job *pjob, int has_sv_qs_mutex, const char *prev_id, bool reservation)
+int svr_enquejob(job *pjob, int has_sv_qs_mutex, const char *prev_id, bool reservation, bool recov)
   {
-  fprintf(stderr, "The call to svr_enquejob needs to be mocked!!\n");
-  exit(1);
+  return(PBSE_NONE);
   }
 
 char *get_variable(job *pjob, const char *variable)
   {
-  fprintf(stderr, "The call to get_variable needs to be mocked!!\n");
-  exit(1);
+  return(strdup("napali"));
   }
 
 int safe_strncat(
@@ -232,7 +195,7 @@ job *svr_find_job(const char *jobid, int get_subjob) {return NULL;}
 const char *add_std_filename(job *pjob, char *path, int key, std::string& ds) { return ""; }
 int lock_sv_qs_mutex(pthread_mutex_t *sv_qs_mutex, const char *msg_string) {return(0);}
 struct pbs_queue *lock_queue_with_job_held(struct pbs_queue  *pque, job       **pjob_ptr){return(NULL);}
-pbs_net_t get_hostaddr(int *local_errno, char *hostname) {return 0;}
+pbs_net_t get_hostaddr(int *local_errno, const char *hostname) {return 0;}
 void svr_mailowner(job *pjob, int mailpoint, int force, const char *text) {}
 pbs_queue *get_dfltque(void) {return NULL;}
 int log_job_record(const char *buf){return 0;}
@@ -242,7 +205,6 @@ void svr_evaljobstate(job &pjob, int &newstate, int &newsub, int forceeval) {}
 int encode_unkn(pbs_attribute *attr, tlist_head *phead, const char *atname, const char *rsname, int mode, int perm) {return 0;}
 int set_unkn(struct pbs_attribute *old, struct pbs_attribute *new_attr, enum batch_op op) {return 0;}
 int decode_time(pbs_attribute *patr, const char *name, const char *rescn, const char *val, int perm) {return 0;}
-void update_array_values(job_array *pa, int old_state, enum ArrayEventsEnum event, const char *job_id, long job_atr_hold, int job_exit_status){}
 int comp_b(struct pbs_attribute *attr, struct pbs_attribute *with) {return 0;}
 void issue_track(job *pjob) {}
 int unlock_sv_qs_mutex(pthread_mutex_t *sv_qs_mutex, const char *msg_string) {return(0);}
@@ -264,7 +226,12 @@ int job_log_open(char *filename, char *directory) {return 0;}
 char *threadsafe_tokenizer(char **str, const char *delims) {return NULL;}
 int set_ll(struct pbs_attribute *attr, struct pbs_attribute *new_attr, enum batch_op op) {return 0;}
 int set_l(struct pbs_attribute *attr, struct pbs_attribute *new_attr, enum batch_op op) {return 0;}
-int array_delete(job_array *pa) {return 0;}
+
+int array_delete(const char *array_id) 
+  {
+  return(PBSE_NONE);
+  }
+
 int array_save(job_array *pa) {return 0;}
 int reply_jobid(struct batch_request *preq, char *jobid, int which) {return 0;}
 void mutex_mgr::set_unlock_on_exit(bool val) {}
@@ -289,6 +256,7 @@ int mutex_mgr::lock(){return 0;}
 int  increment_queued_jobs(user_info_holder *uih, char *user_name, job *pjob) {return 0;}
 int relay_to_mom(job **pjob_ptr, batch_request   *request, void (*func)(struct work_task *)) {return 0;}
 int  decrement_queued_jobs(user_info_holder *uih, char *user_name, job *pjob) {return 0;}
+int req_runjob(batch_request *preq) {return(0);}
 void reply_badattr(int code, int aux, svrattrl *pal, struct batch_request *preq) {}
 void req_reject(int code, int aux, struct batch_request *preq, const char *HostName, const char *Msg) {}
 void free_unkn(pbs_attribute *pattr) {}
@@ -320,7 +288,7 @@ int svr_chk_owner(struct batch_request *preq, job *pjob) {return 0;}
 int comp_checkpoint(pbs_attribute *attr, pbs_attribute *with) {return 0;}
 batch_request *get_remove_batch_request(char *br_id) {return NULL;}
 long calc_job_cost(job *pjob) {return(0);}
-int issue_to_svr(char *servern, struct batch_request *preq, void (*replyfunc)(struct work_task *)) {return 0;}
+int issue_to_svr(const char *servern, struct batch_request **preq, void (*replyfunc)(struct work_task *)) {return 0;}
 int que_to_local_svr(struct batch_request *preq) {return 0;}
 int job_set_wait(pbs_attribute *pattr, void *pjob, int mode) {return 0;}
 int get_batch_request_id(batch_request *preq) {return 0;}
@@ -345,6 +313,11 @@ int id_map::get_new_id(const char *job_name)
   return(id++);
   }
 
+const char *id_map::get_name(int internal_job_id)
+  {
+  return("1.napali");
+  }
+
 id_map job_mapper;
 
 char *get_correct_jobname(const char *id)
@@ -352,6 +325,53 @@ char *get_correct_jobname(const char *id)
   return(strdup(id));
   }
 
+int encode_complete_req(
+    
+  pbs_attribute *attr,
+  tlist_head    *phead,
+  const char    *atname,
+  const char    *rsname,
+  int            mode,
+  int            perm)
+
+  {
+  return(0);
+  }
+
+int  decode_complete_req(
+    
+  pbs_attribute *patr,
+  const char    *name,
+  const char    *rescn,
+  const char    *val,
+  int            perm)
+
+  {
+  return(0);
+  }
+
+int comp_complete_req(
+   
+  pbs_attribute *attr,
+  pbs_attribute *with)
+
+  {
+  return(0);
+  } // END comp_complete_req()
+
+void free_complete_req(
+
+  pbs_attribute *patr) {}
+
+int set_complete_req(
+    
+  pbs_attribute *attr,
+  pbs_attribute *new_attr,
+  enum batch_op  op)
+  
+  {
+  return(0);
+  }
 void handle_complete_second_time(struct work_task *ptask)
   {
   }
@@ -363,3 +383,154 @@ bool completed_jobs_map_class::add_job(char const* s, time_t t) {return false;}
 std::string get_path_jobdata(const char *a, const char *b) {return "";}
 
 void add_to_completed_jobs(work_task *wt) {}
+
+int pbsnode::unlock_node(const char *id, const char *msg, int level)
+  {
+  return(0);
+  }
+
+int update_user_acls(
+
+  pbs_attribute *pattr,
+  void          *pobject,
+  int            actmode)
+
+  {
+  return(0);
+  }
+
+const char *pbsnode::get_name() const
+  {
+  return(this->nd_name.c_str());
+  }
+
+int update_group_acls(
+
+  pbs_attribute *pattr,
+  void          *pobj,
+  int            actmode)
+
+  {
+  return(0);
+  }
+
+int node_exception_check(
+
+  pbs_attribute *pattr,
+  void          *pobject,
+  int            actmode)
+
+  {
+  return(0);
+  }
+
+job::job() 
+  {
+  memset(this->ji_wattr, 0, sizeof(this->ji_wattr));
+  }
+
+job::~job() {}
+
+int node_avail_complex(
+
+  char *spec,   /* I - node spec */
+  int  *navail, /* O - number available */
+  int  *nalloc, /* O - number allocated */
+  int  *nresvd, /* O - number reserved  */
+  int  *ndown)  /* O - number down      */
+
+  {
+  return(0);
+  }
+
+int lock_ai_mutex(
+
+  job_array  *pa,
+  const char *id,
+  const char *msg,
+  int        logging)
+
+  {
+  return(0);
+  }
+
+int insert_array(
+
+  job_array *pa)
+
+  {
+  return(0);
+  }
+
+void clear_attr(
+
+  pbs_attribute *pattr, /* O */
+  attribute_def *pdef)  /* I */
+
+  {
+  memset(pattr, 0, sizeof(pbs_attribute));
+
+  pattr->at_type = pdef->at_type;
+
+  if ((pattr->at_type == ATR_TYPE_RESC) ||
+      (pattr->at_type == ATR_TYPE_LIST))
+    {
+    CLEAR_HEAD(pattr->at_val.at_list);
+    }
+
+  return;
+  }  /*END clear_attr() */
+
+array_info::array_info() {}
+
+job_array::job_array() : job_ids(NULL), jobs_recovered(0), ai_ghost_recovered(false), uncreated_ids(),
+                         ai_mutex(NULL), ai_qs()
+
+  {
+  this->ai_mutex = (pthread_mutex_t *)calloc(1, sizeof(pthread_mutex_t));
+  pthread_mutex_init(this->ai_mutex, NULL);
+  }
+
+void job_array::update_array_values(
+
+  int                   old_state, /* I */
+  enum ArrayEventsEnum  event,     /* I */
+  const char           *job_id,
+  int                   job_exit_status)
+
+  {
+  }
+
+void job_array::set_array_id(
+
+  const char *array_id)
+
+  {
+  snprintf(this->ai_qs.parent_id, sizeof(this->ai_qs.parent_id), "%s", array_id);
+  }
+
+void job_array::set_arrays_fileprefix(
+
+  const char *file_prefix)
+
+  {
+  snprintf(this->ai_qs.fileprefix, sizeof(this->ai_qs.fileprefix), "%s", file_prefix);
+  }
+
+void job_array::set_owner(
+
+  const char *owner)
+
+  {
+  snprintf(this->ai_qs.owner, sizeof(this->ai_qs.owner), "%s", owner);
+  }
+
+bool job_array::is_deleted() const
+  {
+  return(this->being_deleted);
+  }
+
+int check_default_gpu_mode_str(pbs_attribute *pattr, void *pobj, int mode)
+  {
+  return(PBSE_NONE);
+  }

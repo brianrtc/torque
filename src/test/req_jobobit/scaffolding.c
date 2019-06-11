@@ -22,8 +22,10 @@
 #include "id_map.hpp"
 #include "completed_jobs_map.h"
 #include "resource.h"
+#include "track_alps_reservations.hpp"
 
 
+bool cray_enabled;
 int  attr_count = 0;
 int  next_count = 0;
 const char *msg_momnoexec2 = "Job cannot be executed\nSee job standard error file";
@@ -53,10 +55,10 @@ int bad_connect;
 int bad_job;
 int bad_queue;
 int double_bad;
-int cray_enabled;
 int reported;
 int bad_drequest;
 int usage;
+int called_account_jobend;
 bool purged = false;
 bool completed = false;
 bool exited = false;
@@ -76,7 +78,7 @@ struct batch_request *alloc_br(int type)
   return(preq);
   }
 
-char *parse_servername(char *name, unsigned int *service)
+char *parse_servername(const char *name, unsigned int *service)
   {
   return(strdup(name));
   }
@@ -96,7 +98,7 @@ void svr_mailowner_with_message(job *pjob, int mailpoint, int force, const char 
 
 void svr_mailowner(job *pjob, int mailpoint, int force, const char *text) {}
 
-pbs_net_t get_hostaddr(int *local_errno, char *hostname)
+pbs_net_t get_hostaddr(int *local_errno, const char *hostname)
   {
   return(0);
   }
@@ -137,7 +139,7 @@ job_array *get_jobs_array(job **pjob)
   }
 
 
-void free_nodes(job *) {}
+void free_nodes(job *pjob, const char *spec) {}
 
 void free_br(struct batch_request *preq) {}
 
@@ -242,15 +244,18 @@ void get_jobowner(char *from, char *to)
 
 int get_svr_attr_l(int index, long *l)
   {
+  if (usage)
+    *l = 0x0010;
+
+  return(0);
+  }
+
+int get_svr_attr_b(int index, bool *b)
+  {
   if (index == SRV_ATR_DisableAutoRequeue)
-    *l = disable_requeue;
-  else
-    {
-    if (cray_enabled)
-      *l = 1;
-    else if (usage)
-      *l = 0x0010;
-    }
+    *b = disable_requeue;
+  else if (cray_enabled)
+    *b = true;
 
   return(0);
   }
@@ -337,9 +342,10 @@ void log_err(int error, const char *func_id, const char *msg) {}
 
 void log_record(int eventtype, int objclass, const char *objname, const char *text) {}
 
-void account_jobend(job *pjob, std::string &data) {}
-
-void update_array_values(job_array *pa, int old_state, enum ArrayEventsEnum event, const char *job_id, long job_atr_hold, int job_exit_status) {}
+void account_jobend(job *pjob, std::string &data) 
+  {
+  called_account_jobend++;
+  }
 
 id_map::id_map() {}
 
@@ -444,3 +450,69 @@ void *get_next(
   }
 
 void add_to_completed_jobs(work_task *ptask) {}
+
+pbsnode::pbsnode() {}
+pbsnode::~pbsnode() {}
+
+int pbsnode::get_version() const
+
+  {
+  return(0);
+  }
+
+int pbsnode::unlock_node(const char *id, const char *msg, int level)
+  {
+  return(0);
+  }
+
+job::job() 
+  {
+  memset(this->ji_wattr, 0, sizeof(this->ji_wattr));
+  this->ji_mutex = (pthread_mutex_t *)calloc(1, sizeof(pthread_mutex_t));
+  pthread_mutex_init(this->ji_mutex, NULL);
+  }
+
+job::~job() {}
+
+void job::add_plugin_resource_usage(std::string &acct_data) const 
+  {
+  }
+
+int get_time_string(char *buf, int bufsize, long timeval)
+  {
+  return(0);
+  }
+
+reservation_holder alps_reservations;
+
+reservation_holder::reservation_holder() {}
+
+int reservation_holder::remove_alps_reservation(
+
+  const char *rsv_id)
+
+  {
+  return(PBSE_NONE);
+  }
+
+void set_reply_type(struct batch_reply *preply, int type)
+  {
+  preply->brp_choice = type;
+  }
+
+job_array::job_array() {}
+job_array::~job_array() {}
+
+array_info::array_info() {}
+array_info::~array_info() {}
+
+void job_array::update_array_values(
+
+  int                   old_state, /* I */
+  enum ArrayEventsEnum  event,     /* I */
+  const char           *job_id,
+  int                   job_exit_status)
+
+  {
+  }
+

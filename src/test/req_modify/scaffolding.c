@@ -12,7 +12,6 @@
 #include "list_link.h" /* list_link, tlist_head */
 #include "queue.h" /* pbs_queue */
 #include "work_task.h" /* work_task */
-#include "dynamic_string.h"
 #include "threadpool.h"
 
 const char *PJobSubState[10];
@@ -25,6 +24,8 @@ resource_def *svr_resc_def;
 const char *PJobState[] = {"hi", "hello"};
 struct server server;
 int LOGLEVEL = 7; /* force logging code to be exercised as tests run */
+
+static int acl_check_n = 0;
 
 char *get_correct_jobname_return;
 
@@ -76,7 +77,7 @@ int find_attr(struct attribute_def *attr_def, const char *name, int limit)
   exit(1);
   }
 
-job_array *get_array(char *id)
+job_array *get_array(const char *id)
   {
   fprintf(stderr, "The call to get_array to be mocked!!\n");
   exit(1);
@@ -100,6 +101,11 @@ int attr_atomic_set(struct svrattrl *plist, pbs_attribute *old, pbs_attribute *n
   {
   fprintf(stderr, "The call to attr_atomic_set to be mocked!!\n");
   exit(1);
+  }
+
+void *get_next(list_link pl, char *file, int line)
+  {
+  return(NULL);
   }
 
 int chk_hold_priv(long val, int perm)
@@ -205,9 +211,9 @@ int get_svr_attr_l(int index, long *l)
   return(0);
   }
 
-dynamic_string *get_dynamic_string(int initial_size, const char *str)
+int get_svr_attr_b(int index, bool *b)
   {
-  return(NULL);
+  return(0);
   }
 
 batch_request *get_remove_batch_request(
@@ -280,6 +286,47 @@ job *chk_job_request(char *p, batch_request *b)
   return(jp);
   }
 
-void *get_next(list_link pl, char *file, int line) {return NULL;}
 
 void reply_ack(struct batch_request *preq) {}
+
+void overwrite_complete_req(
+
+  pbs_attribute *attr,
+  pbs_attribute *new_attr) {}
+
+int acl_check(pbs_attribute *pattr, char *name, int type)
+  {
+  bool rc;
+
+  switch(acl_check_n)
+    {
+    case 0:
+      rc = true;
+      break;
+
+    case 1:
+      rc = false;
+      break;
+
+    case 2:
+      rc = true;
+      break;
+
+    default:
+      rc = false;
+   }
+
+  acl_check_n++;
+
+  return(rc);
+  }
+
+void job::set_plugin_resource_usage(
+
+  const char *name,
+  const char *val)
+  
+  {
+  }
+
+void update_slot_held_jobs(job_array *pa, int num_to_release) {}

@@ -5,9 +5,9 @@
 #include <netdb.h>
 
 #include "u_tree.h"
-#include "dynamic_string.h"
 #include "tcp.h"
 #include "pbs_job.h"
+#include "pbs_nodes.h"
 #include "mutex_mgr.hpp"
 #include "threadpool.h"
 #include "execution_slot_tracker.hpp"
@@ -15,6 +15,8 @@
 #include "mom_hierarchy_handler.h"
 #include "id_map.hpp"
 #include "node_manager.h"
+#include "pbs_ifl.h"
+#include "authorized_hosts.hpp"
 
 
 id_map      job_mapper;
@@ -39,6 +41,15 @@ const char *dis_emsg[] =
   };
 
 threadpool_t *task_pool;
+
+#define ATTR_NODE_total_sockets        "total_sockets"
+#define ATTR_NODE_total_numa_nodes     "total_numa_nodes"
+#define ATTR_NODE_total_cores          "total_cores"
+#define ATTR_NODE_total_threads        "total_threads"
+#define ATTR_NODE_dedicated_sockets    "dedicated_sockets"
+#define ATTR_NODE_dedicated_numa_nodes "dedicated_numa_nodes"
+#define ATTR_NODE_dedicated_cores      "dedicated_cores"
+#define ATTR_NODE_dedicated_threads    "dedicated_threads"
 
 
 char * netaddr(struct sockaddr_in *ap)
@@ -73,15 +84,6 @@ int insert_addr_name_info(
   char               *hostname,
   char               *full_hostname,
   struct sockaddr_in *sai)
-
-  {
-  return(0);
-  }
-
-dynamic_string *get_dynamic_string(
-    
-  int         initial_size, /* I (-1 means default) */
-  const char *str)          /* I (optional) */
 
   {
   return(0);
@@ -132,8 +134,6 @@ struct pbsnode *find_nodebyname(
   {
   return(NULL);
   }
-
-void free_dynamic_string(dynamic_string *ds) {}
 
 int unlock_node(
     
@@ -207,11 +207,6 @@ void log_event(int eventtype, int objclass, const char *objname, const char *tex
 void log_err(int errnum, const char *routine, const char *text) {}
 void close_conn(int sd, int has_mutex) {}
 
-int copy_to_end_of_dynamic_string(dynamic_string *ds, const char *to_copy) 
-  {
-  return(0);
-  }
-
 job *get_job_from_jobinfo(
     
   struct jobinfo *jp,
@@ -283,6 +278,17 @@ void mom_hierarchy_handler::sendHierarchyToANode(struct pbsnode *node)
   {
   }
 
+int disrsi(tcp_chan *channel, int *ret)
+  {
+  return(PBSE_NONE);
+  }
+
+int disrui(tcp_chan *channel, int *ret)
+  {
+  return(PBSE_NONE);
+  }
+
+                                                                                                                                           
 void write_node_power_state(void)
   {
   return;
@@ -324,16 +330,7 @@ struct prop *init_prop(
   char *pname) /* I */
 
   {
-  struct prop *pp;
-
-  if ((pp = (struct prop *)calloc(1, sizeof(struct prop))) != NULL)
-    {
-    pp->name    = pname;
-    pp->mark    = 0;
-    pp->next    = 0;
-    }
-
-  return(pp);
+  return(new prop(pname));
   }  /* END init_prop() */
 
 
@@ -364,12 +361,12 @@ int node_gpustatus_list(
   return(0);
   }
 
-int process_alps_status(const char *nd_name, std::vector<std::string> &status)
+int get_svr_attr_l(int index, long *l)
   {
   return(0);
   }
 
-int get_svr_attr_l(int index, long *l)
+int get_svr_attr_b(int index, bool *b)
   {
   return(0);
   }
@@ -563,11 +560,11 @@ int node_prop_list(pbs_attribute*, void*, int)
 
 int ctnodes(
 
-  char *spec)
+  const char *spec)
 
   {
   int   ct = 0;
-  char *pc;
+  const char *pc;
 
   while (1)
     {
@@ -694,8 +691,246 @@ char *csv_find_string(
   return(NULL);
   }
 
+int process_alps_status(
 
+  const char               *nd_name,
+  std::vector<std::string> &status_info)
+
+  {
+  return(PBSE_NONE);
+  }
+
+int is_whitespace(
+
+  char c)
+
+  {
+  if ((c == ' ')  ||
+      (c == '\n') ||
+      (c == '\t') ||
+      (c == '\r') ||
+      (c == '\f'))
+    return(TRUE);
+  else
+    return(FALSE);
+  } /* END is_whitespace */
+
+
+void move_past_whitespace(
+
+  char **str)
+
+  {
+  if ((str == NULL) ||
+      (*str == NULL))
+    return;
+
+  char *current = *str;
+
+  while (is_whitespace(*current) == TRUE)
+    current++;
+
+  *str = current;
+  } // END move_past_whitespace()
+
+
+/*
+ *  * capture_until_close_character()
+ *   */
+
+void capture_until_close_character(
+
+  char        **start,
+  std::string  &storage,
+  char          end)
+
+  {
+  if ((start == NULL) ||
+      (*start == NULL))
+    return;
+
+  char *val = *start;
+  char *ptr = strchr(val, end);
+
+  // Make sure we found a close quote and this wasn't an empty string
+  if ((ptr != NULL) &&
+      (ptr != val))
+    {
+    storage = val;
+    storage.erase(ptr - val);
+    *start = ptr + 1; // add 1 to move past the character
+    }
+  } // capture_until_close_character()
+
+
+#define MAXLINE 1024
+
+void add_range_to_string(
+
+  std::string &range_string,
+  int          begin,
+  int          end)
+
+  {
+  char buf[MAXLINE];
+
+  if (begin == end)
+    {
+    if (range_string.size() == 0)
+      sprintf(buf, "%d", begin);
+    else
+      sprintf(buf, ",%d", begin);
+    }
+  else
+    {
+    if (range_string.size() == 0)
+      sprintf(buf, "%d-%d", begin, end);
+    else
+      sprintf(buf, ",%d-%d", begin, end);
+    }
+
+  range_string += buf;
+  } // END add_range_to_string()
+
+
+void translate_vector_to_range_string(
+
+  std::string            &range_string,
+  const std::vector<int> &indices)
+
+  {
+  // range_string starts empty
+  range_string.clear();
+  
+  if (indices.size() == 0)
+    return;
+  
+  int first = indices[0];
+  int prev = first;
+  
+  for (unsigned int i = 1; i < indices.size(); i++)
+    {
+    if (indices[i] == prev + 1)
+      {
+      // Still in a consecutive range
+      prev = indices[i];
+      }
+    else
+      {
+      add_range_to_string(range_string, first, prev);
+  
+      first = prev = indices[i];
+      }
+    }
+  
+  // output final piece
+  add_range_to_string(range_string, first, prev);
+  } // END translate_vector_to_range_string()
+  
+
+int translate_range_string_to_vector(
+
+  const char       *range_string,
+  std::vector<int> &indices)
+
+  {
+  char *str = strdup(range_string);
+  char *ptr = str;
+  int   prev;
+  int   curr;
+
+  while (*ptr != '\0')
+    {
+    prev = strtol(ptr, &ptr, 10);
+
+    if (*ptr == '-')
+      {
+      ptr++;
+      curr = strtol(ptr, &ptr, 10);
+
+      while (prev <= curr)
+        {
+        indices.push_back(prev);
+
+        prev++;
+        }
+
+      if ((*ptr == ',') ||
+          (is_whitespace(*ptr)))
+        ptr++;
+      }
+    else
+      {
+      indices.push_back(prev);
+
+      if ((*ptr == ',') ||
+          (is_whitespace(*ptr)))
+        ptr++;
+      }
+    }
+
+  free(str);
+
+  return(PBSE_NONE);
+  } /* END translate_range_string_to_vector() */
+
+bool task_hosts_match(const char *one, const char *two)
+  {
+  return(true);
+  }
+
+const char *pbsnode::get_name() const
+  {
+  return(this->nd_name.c_str());
+  }
+
+int pbsnode::lock_node(const char *caller, const char *msg, int level)
+  {
+  return(0);
+  }
+
+int pbsnode::unlock_node(const char *caller, const char *msg, int level)
+  {
+  return(0);
+  }
+
+void pbsnode::change_name(const char *hostname)
+  {
+  this->nd_name = hostname;
+  }
+
+void pbsnode::set_version(const char *) {}
+
+void pbsnode::capture_plugin_resources(const char *) {}
 
 #include "../../src/server/id_map.cpp"
 #include "../../src/server/node_attr_def.c"
+#include "../../src/lib/Libutils/machine.cpp"
+#include "../../src/lib/Libutils/numa_chip.cpp"
+#include "../../src/lib/Libutils/numa_socket.cpp"
+#include "../../src/lib/Libutils/numa_core.cpp"
+#include "../../src/lib/Libutils/numa_pci_device.cpp"
+#include "../../src/lib/Libutils/allocation.cpp"
+#include "../../src/lib/Libattr/req.cpp"
+#include "../../src/lib/Libattr/complete_req.cpp"
 //#include "../../src/lib/Libattr/attr_fn_str.c"
+#ifdef MIC
+int Chip::initializeMICDevices(hwloc_obj_t chip_obj, hwloc_topology_t topology)
+  {
+  return(0);
+  }
+#endif
+
+#ifdef NVIDIA_GPUS
+int Machine::initializeNVIDIADevices(hwloc_obj_t, hwloc_topology_t) {return(0);}
+#endif
+
+job::job() {}
+
+pbsnode *authorized_hosts::get_authorized_node(unsigned long addr, unsigned short port)
+  {
+  return(NULL);
+  }
+
+authorized_hosts::authorized_hosts() {}
+authorized_hosts auth_hosts;

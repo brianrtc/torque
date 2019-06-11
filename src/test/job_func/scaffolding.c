@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <stdio.h> /* fprintf */
 #include <pthread.h>
+#include <semaphore.h>
 #include <errno.h>
 #include <string>
 #include <semaphore.h>
@@ -24,13 +25,15 @@
 int func_num = 0; /* Suite number being run */
 int tc = 0; /* Used for test routining */
 int iter_num = 0;
+int called_remove_job;
+int dequejob_rc;
 
-extern sem_t *job_clone_semaphore;
 bool exit_called = false;
 
 int valbuf_size = 0;
 /* end manip */
 
+sem_t *job_clone_semaphore;
 char *path_jobs;
 char path_checkpoint[MAXPATHLEN + 1];
 char *job_log_file = NULL;
@@ -41,11 +44,11 @@ char *path_spool;
 const char *msg_err_purgejob = "Unlink of job file failed";
 struct server server;
 all_jobs array_summary;
+all_jobs alljobs;
 char *path_jobinfo_log;
 int LOGLEVEL = 7; /* force logging code to be exercised as tests run */
 pthread_mutex_t job_log_mutex = PTHREAD_MUTEX_INITIALIZER;
 completed_jobs_map_class completed_jobs_map;
-sem_t *job_clone_semaphore;
 
 user_info_holder users;
 extern bool add_job_called;
@@ -114,7 +117,7 @@ void clear_attr(pbs_attribute *pattr, attribute_def *pdef)
     }
   }
 
-pbs_net_t get_hostaddr(int *local_errno, char *hostname)
+pbs_net_t get_hostaddr(int *local_errno, const char *hostname)
   {
   pbs_net_t loopback = ntohl(INADDR_LOOPBACK);
   return(loopback);
@@ -162,8 +165,7 @@ struct work_task *set_task(enum work_type type, long event_id, void (*func)(work
 
 int svr_dequejob(job *pjob, int val)
   {
-  fprintf(stderr, "The call to svr_dequejob needs to be mocked!!\n");
-  exit(1);
+  return(dequejob_rc);
   }
 
 ssize_t write_nonblocking_socket(int fd, const void *buf, ssize_t count)
@@ -178,10 +180,9 @@ void initialize_all_tasks_array(all_tasks *at)
   exit(1);
   }
 
-job_array *get_array(char *id)
+job_array *get_array(const char *id)
   {
-  fprintf(stderr, "The call to get_array needs to be mocked!!\n");
-  exit(1);
+  return(NULL);
   }
 
 job *get_recycled_job()
@@ -218,22 +219,15 @@ int issue_signal(job **pjob, const char *signame, void (*func)(batch_request *),
   exit(1);
   }
 
-int svr_enquejob(job *pjob, int has_sv_qs_mutex, const char *prev_jobid, bool reservation)
+int svr_enquejob(job *pjob, int has_sv_qs_mutex, const char *prev_jobid, bool reservation, bool recov)
   {
   fprintf(stderr, "The call to svr_enquejob needs to be mocked!!\n");
   exit(1);
   }
 
-void update_array_values(job_array *pa, int old_state, enum ArrayEventsEnum event, const char *job_id, long job_atr_hold, int job_exit_status)
+int array_delete(const char *array_id)
   {
-  fprintf(stderr, "The call to update_array_values needs to be mocked!!\n");
-  exit(1);
-  }
-
-int array_delete(job_array *pa)
-  {
-  fprintf(stderr, "The call to array_delete needs to be mocked!!\n");
-  exit(1);
+  return(0);
   }
 
 void release_req(struct work_task *pwt)
@@ -314,6 +308,11 @@ int lock_queue(struct pbs_queue *the_queue, const char *method_name, const char 
   }
 
 int get_svr_attr_l(int index, long *l)
+  {
+  return(0);
+  }
+
+int get_svr_attr_b(int index, bool *b)
   {
   return(0);
   }
@@ -513,6 +512,7 @@ job *svr_find_job(const char *jobid, int sub)
 
 int remove_job(all_jobs *aj, job             *pjob, bool b)
   {
+  called_remove_job++;
   return(0);
   }
 
@@ -607,7 +607,70 @@ int id_map::get_new_id(const char *id)
   return(-1);
   }
 
+const char *id_map::get_name(int internal_job_id)
+  {
+  static char buf[1024];
+
+  if (internal_job_id < 5)
+    {
+    snprintf(buf, sizeof(buf), "%d.napali", internal_job_id);
+
+    return(buf);
+    }
+
+  return(NULL);
+  }
+
 id_map job_mapper;
+
+int encode_complete_req(
+    
+  pbs_attribute *attr,
+  tlist_head    *phead,
+  const char    *atname,
+  const char    *rsname,
+  int            mode,
+  int            perm)
+
+  {
+  return(0);
+  }
+
+int  decode_complete_req(
+    
+  pbs_attribute *patr,
+  const char    *name,
+  const char    *rescn,
+  const char    *val,
+  int            perm)
+
+  {
+  return(0);
+  }
+
+int comp_complete_req(
+   
+  pbs_attribute *attr,
+  pbs_attribute *with)
+
+  {
+  return(0);
+  } // END comp_complete_req()
+
+void free_complete_req(
+
+  pbs_attribute *patr) {}
+
+int set_complete_req(
+    
+  pbs_attribute *attr,
+  pbs_attribute *new_attr,
+  enum batch_op  op)
+  
+  {
+  return(0);
+  }
+
  
 void handle_complete_second_time(struct work_task *ptask)
   {
@@ -625,3 +688,30 @@ bool completed_jobs_map_class::add_job(char const* s, time_t t)
 std::string get_path_jobdata(const char *a, const char *b) {return ""; }
 
 void add_to_completed_jobs(work_task *ptask) {}
+
+job::job() 
+  {
+  this->ji_mutex = (pthread_mutex_t *)calloc(1, sizeof(pthread_mutex_t));
+ 
+  memset(this->ji_wattr, 0, sizeof(this->ji_wattr));
+  memset(&this->ji_qs, 0, sizeof(struct jobfix));
+  }
+
+job::~job() 
+  {
+  }
+
+void job_array::update_array_values(
+
+  int                   old_state, /* I */
+  enum ArrayEventsEnum  event,     /* I */
+  const char           *job_id,
+  int                   job_exit_status)
+
+  {
+  }
+
+bool job_array::is_deleted() const
+  {
+  return(this->being_deleted);
+  }

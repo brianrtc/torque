@@ -12,6 +12,7 @@
 #include "test_mom_comm.h"
 #include "resmon.h"
 #include "mom_server.h"
+#include "complete_req.hpp"
 
 extern int disrsi_return_index;
 extern int disrst_return_index;
@@ -21,6 +22,7 @@ extern int log_event_counter;
 extern bool ms_val;
 extern mom_server mom_servers[PBS_MAXSERVER];
 extern int ServerStatUpdateInterval;
+int get_reply_stream(job *pjob);
 extern time_t LastServerUpdateTime;
 extern time_t time_now;
 extern bool ForceServerUpdate;
@@ -38,6 +40,78 @@ void create_contact_list(job &pjob, std::set<int> &sister_list, struct sockaddr_
 int handle_im_poll_job_response(struct tcp_chan *chan, job &pjob, int nodeidx, hnodent *np);
 received_node *get_received_node_entry(char *str);
 bool is_nodeid_on_this_host(job *pjob, tm_node_id nodeid);
+task *find_task_by_pid(job *pjob, int pid);
+
+#ifdef PENABLE_LINUX_CGROUPS
+int get_req_and_task_index_from_local_rank(job *pjob, int local_rank, unsigned int &req_index, unsigned int &task_index);
+
+extern bool per_task;
+#endif
+
+
+START_TEST(test_get_reply_stream)
+  {
+  job pjob;
+  pjob.ji_hosts = NULL;
+
+  // Make sure we don't segfault
+  fail_unless(get_reply_stream(NULL) == -1);
+  fail_unless(get_reply_stream(&pjob) == -1);
+  }
+END_TEST
+
+
+#ifdef PENABLE_LINUX_CGROUPS
+START_TEST(test_get_req_and_task_index_from_local_rank)
+  {
+  job *pjob = (job *)calloc(1, sizeof(job));
+  complete_req cr;
+  unsigned int req_index = 0;
+  unsigned int task_index = 0;
+
+  // If this attribute isn't set, we should do nothing
+  pjob->ji_wattr[JOB_ATR_request_version].at_val.at_long = 2;
+  fail_unless(get_req_and_task_index_from_local_rank(pjob, 1, req_index, task_index) == PBSE_NO_PROCESS_RANK);
+
+  pjob->ji_wattr[JOB_ATR_request_version].at_flags = ATR_VFLAG_SET;
+  pjob->ji_wattr[JOB_ATR_req_information].at_flags = ATR_VFLAG_SET;
+  pjob->ji_wattr[JOB_ATR_req_information].at_val.at_ptr = &cr;
+  per_task = false; // Setting this means I should get PBSE_NO_PROCESS_RANK
+  fail_unless(get_req_and_task_index_from_local_rank(pjob, 1, req_index, task_index) == PBSE_NO_PROCESS_RANK);
+
+  per_task = true;
+  fail_unless(get_req_and_task_index_from_local_rank(pjob, 1, req_index, task_index) == PBSE_NONE);
+  }
+END_TEST
+
+#endif
+
+
+START_TEST(test_find_task_by_pid)
+  {
+  job   pjob;
+  task *tasks[10];
+
+  pjob.ji_tasks = new std::vector<task *>();
+
+  for (int i = 0; i < 10; i++)
+    {
+    task *ptask = pbs_task_create(&pjob, TM_NULL_TASK);
+    ptask->ti_qs.ti_sid = i + 90;
+    tasks[i] = ptask;
+    }
+
+  for (int i = 0; i < 10; i++)
+    {
+    task *ptask = find_task_by_pid(&pjob, i + 90);
+    fail_unless(ptask->ti_qs.ti_sid == tasks[i]->ti_qs.ti_sid);
+    }
+
+  fail_unless(find_task_by_pid(&pjob, 1000) == NULL);
+  fail_unless(find_task_by_pid(&pjob, 10) == NULL);
+  fail_unless(find_task_by_pid(&pjob, 777) == NULL);
+  }
+END_TEST
 
 
 START_TEST(is_nodeid_on_this_host_test)
@@ -105,14 +179,11 @@ START_TEST(handle_im_obit_task_response_test)
   {
   job             *pjob = (job *)calloc(1, sizeof(job));
   struct tcp_chan *chan = (struct tcp_chan *)calloc(1, sizeof(struct tcp_chan));
-  task             *ptask = (task *)calloc(1,sizeof(task));
-  pjob->ji_tasks.ll_next = &ptask->ti_jobtask;
-  pjob->ji_tasks.ll_prior = &ptask->ti_jobtask;
-  ptask->ti_jobtask.ll_struct = ptask;
-  ptask->ti_jobtask.ll_next = &pjob->ji_tasks;
-  ptask->ti_jobtask.ll_prior = &pjob->ji_tasks;
+  task             *ptask = new task();
   ptask->ti_qs.ti_task = TM_INIT;
   ptask->ti_chan = chan;
+  pjob->ji_tasks = new std::vector<task *>();
+  pjob->ji_tasks->push_back(ptask);
 
   disrsi_return_index = 500;
   fail_unless(handle_im_obit_task_response(chan,pjob,TM_NULL_TASK,42) == IM_FAILURE);
@@ -422,6 +493,7 @@ START_TEST(tm_spawn_request_test)
   memset(&test_job, 0, sizeof(test_job));
   memset(&test_hnodent, 0, sizeof(test_hnodent));
 
+  test_job.ji_tasks = new std::vector<task *>();
   test_job.ji_vnods = (vnodent *)calloc(3, sizeof(vnodent));
 
   result = tm_spawn_request(&test_chan,
@@ -442,6 +514,7 @@ END_TEST
 START_TEST(pbs_task_create_test)
   {
   job *pjob = (job *)calloc(1, sizeof(job));
+  pjob->ji_tasks = new std::vector<task *>();
 
   /* Check ranning into reserved task IDs */
   pjob->ji_taskid = TM_ADOPTED_TASKID_BASE + 1;
@@ -550,14 +623,19 @@ Suite *mom_comm_suite(void)
 
   tc_core = tcase_create("pbs_task_create_test");
   tcase_add_test(tc_core, pbs_task_create_test);
+  tcase_add_test(tc_core,test_find_task_by_pid); 
   suite_add_tcase(s, tc_core);
 
   tc_core = tcase_create("send_update_soon_test");
   tcase_add_test(tc_core, send_update_soon_test);
+  tcase_add_test(tc_core, test_get_reply_stream);
   suite_add_tcase(s, tc_core);
 
   tc_core = tcase_create("get_stat_update_interval_test");
   tcase_add_test(tc_core, get_stat_update_interval_test);
+#ifdef PENABLE_LINUX_CGROUPS
+  tcase_add_test(tc_core, test_get_req_and_task_index_from_local_rank);
+#endif
   suite_add_tcase(s, tc_core);
 
   return(s);

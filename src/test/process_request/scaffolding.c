@@ -14,6 +14,7 @@
 #include "pbs_nodes.h" /* pbsnode */
 #include "attribute.h" /* pbs_attribute */
 #include "threadpool.h"
+#include "acl_special.hpp"
 
 bool exit_called = false;
 const char *msg_err_noqueue = "Unable to requeue job, queue is not defined";
@@ -32,6 +33,15 @@ bool fail_get_connecthost = false;
 int free_attrlist_called;
 char scaff_buffer[1024];
 int dis_req_read_rc = PBSE_NONE;
+
+bool fail_check;
+
+acl_special limited_acls;
+
+acl_special::acl_special() : ug_acls()
+
+  {
+  }
 
 bool threadpool_is_too_busy(threadpool *tp, int permissions)
   {
@@ -126,10 +136,9 @@ void delete_link(struct list_link *old)
   exit(1);
   }
 
-void req_jobscript(struct batch_request *preq)
+void req_jobscript(batch_request *preq, bool perform_commit)
   {
-  fprintf(stderr, "The call to req_jobscript needs to be mocked!!\n");
-  exit(1);
+  return;
   }
 
 int svr_get_privilege(char *user, char *host)
@@ -235,7 +244,7 @@ int req_altauthenuser(struct batch_request *preq)
   exit(1);
   }
 
-int svr_enquejob(job *pjob, int has_sv_qs_mutex, const char *prev_id, bool reservation)
+int svr_enquejob(job *pjob, int has_sv_qs_mutex, const char *prev_id, bool reservation, bool recov)
   {
   fprintf(stderr, "The call to svr_enquejob needs to be mocked!!\n");
   exit(1);
@@ -274,8 +283,9 @@ void req_rescreserve(struct batch_request *preq)
   exit(1);
   }
 
-void req_quejob(struct batch_request *preq)
+int req_quejob(batch_request *preq, int version)
   {
+  return(PBSE_NONE);
   }
 
 void req_deletearray(struct batch_request *preq)
@@ -471,6 +481,14 @@ int get_svr_attr_l(int index, long *l)
   return(0);
   }
 
+int get_svr_attr_b(int index, bool *b)
+  {
+  if (check_acl == true)
+    *b = true;
+
+  return(0);
+  }
+
 int acl_check_my_array_string(struct array_strings *pas, char *name, int type)
   {
   return(0);
@@ -513,4 +531,34 @@ void log_event(int eventtype, int objclass, const char *objname, const char *tex
   snprintf(scaff_buffer, sizeof(scaff_buffer), "%s", text);
   }
 
+pbsnode::pbsnode() {}
+pbsnode::~pbsnode() {}
+
+int pbsnode::unlock_node(const char *id, const char *msg, int level)
+  {
+  return(0);
+  }
+
+bool acl_special::is_authorized(const std::string &host, const std::string &user) const
+  {
+  if(fail_check == false)
+    return(false);
+  return(true);
+  }
+
+int req_job_cleanup_done(batch_request *preq)
+
+  {
+  return(PBSE_NONE);
+  }
+
+int req_quejob2(batch_request *preq)
+    {
+      return(0);
+        }
+
+int req_commit2(batch_request *preq)
+    {
+      return(0);
+        }
 

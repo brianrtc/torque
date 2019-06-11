@@ -303,11 +303,11 @@ int socket_read_num(int socket, long long *the_num)
   return(rc);
   }
 
-int socket_connect(int *local_socket, char *dest_addr, int dest_addr_len, int dest_port, int family, int is_privileged, std::string &err_msg)
+int socket_connect(int &local_socket, char *dest_addr, int dest_addr_len, int dest_port, int family, int is_privileged, std::string &err_msg)
   {
   if (socket_connect_success == false)
     return(PBSE_SOCKET_FAULT);
-  *local_socket = 21;
+  local_socket = 21;
   return(PBSE_NONE);
   }
 
@@ -319,7 +319,7 @@ void PBSD_FreeReply(batch_reply *br) {}
   return;
   }*/
 
-int get_hostaddr_hostent(int *local_errno, char *hostname, char **host_addr, int *host_addr_len)
+int get_hostaddr_hostent(int *local_errno, const char *hostname, char **host_addr, int *host_addr_len)
   {
   fprintf(stderr, "The call to get_hostaddr_hostent needs to be mocked!!\n");
   return(1);
@@ -328,7 +328,7 @@ int get_hostaddr_hostent(int *local_errno, char *hostname, char **host_addr, int
 int  get_hostaddr_hostent_af(
 
   int             *rc,
-  char            *hostname,
+  const char      *hostname,
   unsigned short  *af_family,
   char           **host_addr,
   int             *host_addr_len)
@@ -638,7 +638,7 @@ char * pbs_default(void)
 pbs_net_t get_hostaddr(
 
   int *local_errno,
-  char *hostname)
+  const char *hostname)
 
   {
   pbs_net_t rval = 10101010;
@@ -649,8 +649,11 @@ pbs_net_t get_hostaddr(
   return(rval);
   }
 
-struct passwd *get_password_entry_by_uid(uid_t uid)
+struct passwd *get_password_entry_by_uid(char **user_buf, uid_t uid)
   {
   return(getpwuid(uid));
   }
 
+void free_pwnam(struct passwd *pwdp, char *buf)
+  {
+  }

@@ -48,8 +48,7 @@ batch_request *alloc_br(int type)
 
 job_array *get_jobs_array(job **pjob)
   {
-  fprintf(stderr, "The call to get_jobs_array needs to be mocked!!\n");
-  exit(1);
+  return(NULL);
   }
 
 void account_record(int acctype, job *pjob, const char *text)
@@ -107,7 +106,7 @@ pbs_queue *get_jobs_queue(job **pjob)
 
 void reply_ack(struct batch_request *preq) {}
 
-void free_nodes(job *pjob) 
+void free_nodes(job *pjob, const char *spec) 
   {
   pjob->ji_wattr[JOB_ATR_exec_host].at_val.at_str = NULL;
   }
@@ -178,7 +177,7 @@ job *svr_find_job(const char *jobid, int get_subjob)
   {
   if (strcmp(jobid, "1.napali") == 0)
     {
-    job *pjob = (job *)calloc(1, sizeof(job));
+    job *pjob = new job();
     strcpy(pjob->ji_qs.ji_jobid, jobid);
     pjob->ji_qs.ji_state = JOB_STATE_RUNNING;
     return(pjob);
@@ -213,6 +212,16 @@ int get_svr_attr_l(int index, long *l)
     {
     *l = server.sv_attr[index].at_val.at_long;
     }
+
+  return(0);
+  }
+
+int get_svr_attr_b(int index, bool *b)
+  {
+  if (nanny)
+    *b = true;
+  else if (index == SRV_ATR_JobNanny)
+    *b = server.sv_attr[index].at_val.at_bool;
 
   return(0);
   }
@@ -566,5 +575,24 @@ int depend_on_term(
   depend_term_called++;
   return(0);
   }
+
+job::job() : ji_has_delete_nanny(false)
+  {
+  memset(this->ji_wattr, 0, sizeof(this->ji_wattr));
+  }
+
+job::~job() {}
+
+void job_array::update_array_values(
+
+  int                   old_state, /* I */
+  enum ArrayEventsEnum  event,     /* I */
+  const char           *job_id,
+  int                   job_exit_status)
+
+  {
+  }
+
+void job_array::mark_deleted() {}
 
 

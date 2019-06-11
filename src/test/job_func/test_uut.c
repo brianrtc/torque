@@ -10,18 +10,42 @@
 #include "pbs_error.h"
 #include "completed_jobs_map.h"
 
+extern sem_t *job_clone_semaphore;
 extern attribute_def job_attr_def[];
-int hostname_in_externals(char *, char *);
+int hostname_in_externals(const char *, const char *);
 int fix_cray_exec_hosts(job *);
 int fix_external_exec_hosts(job *);
 int change_external_job_name(job *);
 int split_job(job *);
 bool add_job_called = false;
+bool internal_job_id_exists(int internal_id);
 void job_free(job *pj, int  use_recycle);
+int conn_qsub(const char *hostname, long  port, char *EMsg);
+
 //bool svr_job_purge_called = false;
 extern completed_jobs_map_class completed_jobs_map;
+extern int called_remove_job;
+extern int dequejob_rc;
+extern all_jobs alljobs;
 
 char buf[4096];
+
+START_TEST(internal_job_id_exists_test)
+  {
+  job pjob;
+  alljobs.insert(&pjob, "0.napali");
+  alljobs.insert(&pjob, "1.napali");
+  alljobs.insert(&pjob, "2.napali");
+
+  // internal ids are set to map to %d.napali in scaffolding.c if < 5
+  for (int i = 0; i < 3; i++)
+    fail_unless(internal_job_id_exists(i) == true);
+
+  for (int i = 3; i < 10; i++)
+    fail_unless(internal_job_id_exists(i) == false);
+  }
+END_TEST
+
 
 START_TEST(hostname_in_externals_test)
   {
@@ -54,8 +78,6 @@ START_TEST(fix_cray_exec_hosts_test)
   char *exec2 = (char *)"napali/0+napali/1+napali/2+napali/3+a1/0+a1/1+a1/2+a1/3+two/0+two/1";
   char *exec3 = (char *)"napali/0+napali/1+napali/2+napali/3+three/0+three/1+a1/0+a1/1+a1/2+a1/3";
   job   pjob;
-
-  memset(&pjob, 0, sizeof(pjob));
 
   pjob.ji_wattr[JOB_ATR_exec_host].at_val.at_str = strdup(exec1);
   pjob.ji_wattr[JOB_ATR_external_nodes].at_val.at_str = strdup(externals);
@@ -95,8 +117,6 @@ START_TEST(fix_external_exec_hosts_test)
   char *exec2 = (char *)"napali/0+napali/1+napali/2+napali/3+a1/0+a1/1+a1/2+a1/3+two/0+two/1";
   char *exec3 = (char *)"napali/0+napali/1+napali/2+napali/3+three/0+three/1+a1/0+a1/1+a1/2+a1/3";
   job   pjob;
-
-  memset(&pjob, 0, sizeof(pjob));
 
   fail_unless(fix_external_exec_hosts(&pjob) == PBSE_BAD_PARAMETER, "error codes not correctly checked");
 
@@ -147,7 +167,7 @@ START_TEST(split_job_test)
   char *externals = (char *)"one+two+three";
   char *exec1 = (char *)"one/0+one/1+napali/0+napali/1+napali/2+napali/3+a1/0+a1/1+a1/2+a1/3";
 
-  memset(&pjob, 0, sizeof(pjob));
+  memset((void *)&pjob, 0, sizeof(pjob));
 
   strcpy(pjob.ji_qs.ji_jobid, "12.napali");
   pjob.ji_wattr[JOB_ATR_exec_host].at_val.at_str = strdup(exec1);
@@ -193,7 +213,6 @@ START_TEST(handle_aborted_job_test)
   job pjob;
   job *job_ptr = &pjob;
 
-  memset(&pjob, 0, sizeof(pjob));
   strcpy(pjob.ji_qs.ji_jobid, "1.lei");
   long KeepSeconds = 50;
 
@@ -342,9 +361,21 @@ START_TEST(svr_job_purge_test)
   int result = svr_job_purge(test_job);
   fail_unless(result != 0, "NULL job input fail");
 
+  called_remove_job = 0;
+  dequejob_rc = PBSE_JOB_NOT_IN_QUEUE;
   test_job = job_alloc();
-  svr_job_purge(test_job);
-  fail_unless(result >= -1, "empty job input fail: %d", result);/*TODO: fix -1 via log_job_record mock*/
+  test_job->ji_qs.ji_substate = JOB_SUBSTATE_QUEUED;
+  test_job->ji_qs.ji_state = JOB_STATE_QUEUED;
+  result = svr_job_purge(test_job);
+  fail_unless(result == 0, "non-queued job fail", result);
+  // called_remove_job once means we didn't call job_free
+  fail_unless(called_remove_job == 1);
+  
+  dequejob_rc = 0;
+  result = svr_job_purge(test_job);
+  fail_unless(result == 0, "queued job fail: %d", result);
+  // Calling remove_job twice means we did call job_free
+  fail_unless(called_remove_job == 3);
   }
 END_TEST
 
@@ -459,28 +490,19 @@ Suite *job_func_suite(void)
 
   tc_core = tcase_create("svr_job_purge_test");
   tcase_add_test(tc_core, svr_job_purge_test);
+  tcase_add_test(tc_core, internal_job_id_exists_test);
   suite_add_tcase(s, tc_core);
 
   tc_core = tcase_create("svr_find_job_test");
   tcase_add_test(tc_core, svr_find_job_test);
-  suite_add_tcase(s, tc_core);
-
-  tc_core = tcase_create("get_jobs_array_test");
-  tcase_add_test(tc_core, get_jobs_array_test);
-  suite_add_tcase(s, tc_core);
-
-  tc_core = tcase_create("get_jobs_array_test");
   tcase_add_test(tc_core, get_jobs_array_test);
   suite_add_tcase(s, tc_core);
 
   tc_core = tcase_create("get_jobs_queue_test");
   tcase_add_test(tc_core, get_jobs_queue_test);
-  suite_add_tcase(s, tc_core);
-
-  tc_core = tcase_create("handle_aborted_job_test");
   tcase_add_test(tc_core, handle_aborted_job_test);
   suite_add_tcase(s, tc_core);
-  
+
   return(s);
   }
 

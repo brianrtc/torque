@@ -19,7 +19,7 @@ int get_job_id(batch_request *preq, int &resc_access_perm, int &created_here, st
 bool job_exists(const char *job_id);
 pbs_queue *get_queue_for_job(char *queue_name, int &rc);
 int determine_job_file_name(batch_request *preq, std::string &jobid, std::string &filename);
-job *create_and_initialize_job_structure(int created_here, std::string &filename, std::string &jobid);
+job *create_and_initialize_job_structure(int created_here, std::string &jobid);
 
 extern struct server server;
 extern char *path_jobs;
@@ -30,22 +30,21 @@ extern long long_to_set;
 extern bool default_queue;
 extern bool mem_fail;
 extern char *path_jobs;
+extern bool set_ji_substate;
 
 
 START_TEST(test_create_and_initialize_job_structure)
   {
   std::string jobid("1.napali");
-  std::string filename("1.napali");
  
   mem_fail = true;
-  job *pjob = create_and_initialize_job_structure(1, filename, jobid);
+  job *pjob = create_and_initialize_job_structure(1, jobid);
   fail_unless(pjob == NULL);
 
   mem_fail = false;
-  pjob = create_and_initialize_job_structure(1, filename, jobid);
+  pjob = create_and_initialize_job_structure(1, jobid);
   fail_unless(pjob != NULL);
   fail_unless(jobid == pjob->ji_qs.ji_jobid);
-  fail_unless(filename == pjob->ji_qs.ji_fileprefix);
   fail_unless(pjob->ji_modified == 1);
   fail_unless(pjob->ji_qs.ji_svrflags == 1);
   fail_unless(pjob->ji_qs.ji_un_type == JOB_UNION_TYPE_NEW);
@@ -124,14 +123,14 @@ START_TEST(test_one)
   memset(&req,0,sizeof(req));
 
   strcpy(req.rq_ind.rq_jobfile.rq_jobid,"NotThisJob");
-  fail_unless(req_jobscript(&req) == PBSE_IVALREQ);
+  fail_unless(req_jobscript(&req, false) == PBSE_IVALREQ);
 
   path_jobs = getcwd(path_to_jobs,sizeof(path_to_jobs));
   strcat(path_jobs,"/");
   sprintf(cmd,"rm -f %s*.SC",path_jobs);
   system(cmd);
   strcpy(req.rq_ind.rq_jobfile.rq_jobid,"1.napali");
-  fail_unless(req_jobscript(&req) == PBSE_NONE);
+  fail_unless(req_jobscript(&req, false) == PBSE_NONE);
   system(cmd);
   }
 END_TEST
@@ -192,6 +191,20 @@ START_TEST(test_get_job_id)
 END_TEST
 
 
+START_TEST(test_req_commit)
+  {
+  struct batch_request *preq;
+
+  fail_unless((preq = (struct batch_request *)calloc(1, sizeof(struct batch_request))) != NULL);
+
+  strcpy(preq->rq_ind.rq_commit, "1.napali");
+  default_queue = false;
+  set_ji_substate = true;
+  fail_unless(PBSE_MUTEX_ALREADY_UNLOCKED == req_commit(preq));
+  }
+END_TEST
+
+
 Suite *req_quejob_suite(void)
   {
   Suite *s = suite_create("req_quejob_suite methods");
@@ -205,6 +218,10 @@ Suite *req_quejob_suite(void)
   tcase_add_test(tc_core, test_get_queue_for_job);
   tcase_add_test(tc_core, test_determine_job_file_name);
   tcase_add_test(tc_core, test_create_and_initialize_job_structure);
+  suite_add_tcase(s, tc_core);
+
+  tc_core = tcase_create("test_req_commit");
+  tcase_add_test(tc_core, test_req_commit);
   suite_add_tcase(s, tc_core);
 
   return s;

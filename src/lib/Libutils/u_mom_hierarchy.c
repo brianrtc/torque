@@ -95,7 +95,7 @@
 #include "utils.h"
 #include "../Liblog/pbs_log.h"
 #include "../Libnet/lib_net.h" /* socket_get_tcp_priv, socket_connect_addr */
-#include "../Libifl/lib_ifl.h"
+#include "lib_ifl.h"
 #define LOCAL_LOG_BUF 1024
 
 
@@ -195,7 +195,7 @@ int rm_establish_connection(
   node_comm_t &nc)
     
   {
-  nc.stream = tcp_connect_sockaddr((struct sockaddr *)&nc.sock_addr,sizeof(nc.sock_addr));
+  nc.stream = tcp_connect_sockaddr((struct sockaddr *)&nc.sock_addr,sizeof(nc.sock_addr), true);
 
   if (nc.stream < 0)
     {
@@ -244,7 +244,7 @@ int tcp_connect_sockaddr(
       if (use_log == true)
         log_err(errno,__func__,"Failed when trying to get privileged port - socket_get_tcp_priv() failed");
       }
-    else if ((rc = socket_connect_addr(&stream, sa, sa_size, 1, err_msg)) != PBSE_NONE)
+    else if ((rc = socket_connect_addr(stream, sa, sa_size, 1, err_msg)) != PBSE_NONE)
       {
       /* FAILED */
       if (errno != EINTR) //Interrupted system call is a retryable error so try it again.

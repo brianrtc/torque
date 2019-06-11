@@ -13,6 +13,7 @@
 #include "libpbs.h" /* job_file */
 #include "mom_config.h"
 #include "mom_mach.h"
+#include "json/json.h"
 
 #define MAXLINE 1024
 
@@ -33,6 +34,9 @@ long     pe_alarm_time = PBS_PROLOG_TIME;
 char *path_epilogp;
 long TJobStartTimeout = 300;
 std::map<std::string, std::string> env_map;
+char *path_jobs;
+int multi_mom;
+unsigned int pbs_rm_port = 0;
 
 ssize_t read_ac_socket(int fd, void *buf, ssize_t count)
   {
@@ -56,7 +60,7 @@ int put_env_var(const char *name, const char *value)
   return(0);
   }
 
-void encode_used(job *pjob, int perm, std::stringstream *list, tlist_head *phead)
+void encode_used(job *pjob, int perm, Json::Value *list, tlist_head *phead)
 
   {
   }

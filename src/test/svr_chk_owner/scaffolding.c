@@ -69,6 +69,11 @@ int get_svr_attr_l(int index, long *l)
   return(0);
   }
 
+int get_svr_attr_b(int index, bool *b)
+  {
+  return(0);
+  }
+
 int get_svr_attr_arst(int index, struct array_strings **arst)
   {
   return(0);
@@ -132,7 +137,7 @@ struct addrinfo * insert_addr_name_info(struct addrinfo *pAddrInfo, const char *
 pbs_net_t get_hostaddr(
 
   int  *local_errno, /* O */    
-  char *hostname)    /* I */
+  const char *hostname)    /* I */
 
   {
   return(0);

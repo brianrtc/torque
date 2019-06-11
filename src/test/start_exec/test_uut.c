@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string>
 #include <set>
+#include <map>
 #include <sys/types.h>
 #include <signal.h>
 #include <limits.h>
@@ -13,10 +14,11 @@
 #include "pbs_nodes.h"
 #include "test_uut.h"
 
-void job_nodes(job &pjob);
+int job_nodes(job &pjob);
 int get_indices_from_exec_str(const char *exec_str, char *buf, int buf_size);
 int  remove_leading_hostname(char **jobpath);
 int get_num_nodes_ppn(const char*, int*, int*);
+int setup_process_launch_pipes(int &kid_read, int &kid_write, int &parent_read, int &parent_write);
 
 #ifdef NUMA_SUPPORT
 extern nodeboard node_boards[];
@@ -37,10 +39,133 @@ extern bool bad_pwd;
 extern bool fail_init_groups;
 extern bool fail_site_grp_check;
 extern bool am_ms;
+extern bool addr_fail;
 
 void create_command(std::string &cmd, char **argv);
 void no_hang(int sig);
 void exec_bail(job *pjob, int code, std::set<int> *sisters_contacted);
+int read_launcher_child_status(struct startjob_rtn *sjr, const char *job_id, int parent_read, int parent_write);
+int process_launcher_child_status(struct startjob_rtn *sjr, const char *job_id, const char *application_name);
+void update_task_and_job_states_after_launch(task *ptask, job *pjob, const char *application_name);
+
+#ifdef PENABLE_LINUX_CGROUPS
+unsigned long long get_memory_limit_from_resource_list(job *pjob);
+#endif
+
+int jobstarter_privileged = 0;
+int ac_read_amount;
+int ac_errno;
+extern int job_saved;
+extern int task_saved;
+
+
+START_TEST(update_task_and_job_states_after_launch_test)
+  {
+  job  *pjob = (job *)calloc(1, sizeof(job));
+  task *ptask = (task *)calloc(1, sizeof(task));
+
+  job_saved = 0;
+  task_saved = 0;
+
+  update_task_and_job_states_after_launch(ptask, pjob, "matlab");
+  fail_unless(pjob->ji_qs.ji_state == JOB_STATE_RUNNING);
+  fail_unless(pjob->ji_qs.ji_substate == JOB_SUBSTATE_RUNNING);
+  fail_unless(ptask->ti_qs.ti_status == TI_STATE_RUNNING);
+  fail_unless(job_saved == 1);
+  fail_unless(task_saved == 1);
+
+  }
+END_TEST
+
+
+START_TEST(process_launcher_child_status_test)
+  {
+  struct startjob_rtn  srj;
+  const char          *jobid = "1.napali";
+  const char          *app = "bob's awesomeness";
+
+  memset(&srj, 0, sizeof(srj));
+
+  // sj_code == 0, so it should be success
+  fail_unless(process_launcher_child_status(&srj, jobid, app) == PBSE_NONE);
+
+  for (int i = -1; i > -13; i--)
+    {
+    srj.sj_code = i;
+    fail_unless(process_launcher_child_status(&srj, jobid, app) == -1);
+    }
+
+  }
+END_TEST
+
+START_TEST(test_setup_process_launch_pipes)
+  {
+  int kid_read;
+  int kid_write;
+  int parent_read;
+  int parent_write;
+
+  if (setup_process_launch_pipes(kid_read, kid_write, parent_read, parent_write) == PBSE_NONE)
+    {
+    fail_unless(kid_read > 2);
+    fail_unless(kid_write > 2);
+
+    close(kid_read);
+    close(kid_write);
+    close(parent_read);
+    close(parent_write);
+    }
+  }
+END_TEST
+
+
+START_TEST(test_read_launcher_child_status)
+  {
+  struct startjob_rtn  srj;
+  const char          *jobid = "1.napali";
+  int                  parent_read = 0;
+  int                  parent_write = 0;
+
+  ac_errno = 0;
+  ac_read_amount = sizeof(startjob_rtn);
+  memset(&srj, 0, sizeof(srj));
+
+  srj.sj_code = -1;
+  fail_unless(read_launcher_child_status(&srj, jobid, parent_read, parent_write) == PBSE_NONE);
+  srj.sj_code = 0;
+  fail_unless(read_launcher_child_status(&srj, jobid, parent_read, parent_write) == PBSE_NONE);
+
+  ac_read_amount = 1;
+  fail_unless(read_launcher_child_status(&srj, jobid, parent_read, parent_write) != PBSE_NONE);
+  }
+END_TEST
+
+
+#ifdef PENABLE_LINUX_CGROUPS
+START_TEST(get_memory_limit_from_resource_list_test)
+  {
+  job pjob;
+
+  memset(&pjob, 0, sizeof(pjob));
+  pjob.ji_vnods = (vnodent *)calloc(4, sizeof(vnodent));
+  pjob.ji_numvnod = 4;
+
+  for (int i = 0; i < pjob.ji_numvnod; i++)
+    pjob.ji_vnods[i].vn_host = (hnodent *)calloc(1, sizeof(hnodent));
+
+  // Do the full case
+  unsigned long long mem_limit = get_memory_limit_from_resource_list(&pjob);
+  fail_unless(mem_limit == 4 * 1024 * 1024);
+  
+  // Test where only half the vnods are on this node
+  for (int i = pjob.ji_numvnod / 2; i < pjob.ji_numvnod; i++)
+    pjob.ji_vnods[i].vn_host->hn_node = 1;
+
+  mem_limit = get_memory_limit_from_resource_list(&pjob);
+  fail_unless(mem_limit == 2 * 1024 * 1024);
+  }
+END_TEST
+#endif
 
 
 START_TEST(remove_leading_hostname_test)
@@ -109,17 +234,25 @@ END_TEST
 START_TEST(job_nodes_test)
   {
   job *pjob = (job *)calloc(1, sizeof(job));
+  pjob->ji_usages = new std::map<std::string, job_host_data>();
 
   pjob->ji_wattr[JOB_ATR_exec_host].at_val.at_str = strdup("napali/0-9+waimea/0-9");
   pjob->ji_wattr[JOB_ATR_exec_port].at_val.at_str = strdup("15002+15002");
 
-  job_nodes(*pjob);
+  fail_unless(job_nodes(*pjob) != PBSE_NONE);
   // nothing should've happened since the flag isn't set
   fail_unless(pjob->ji_numnodes == 0);
-
+  
   pjob->ji_wattr[JOB_ATR_exec_host].at_flags = ATR_VFLAG_SET;
 
-  job_nodes(*pjob);
+  // Force it to not resolve the hostname
+  addr_fail = true;
+  int rc = job_nodes(*pjob);
+  fail_unless(rc == PBSE_CANNOT_RESOLVE, "Error is %d", rc);
+  addr_fail = false; // allow things to work normally
+
+
+  fail_unless(job_nodes(*pjob) == PBSE_NONE);
   fail_unless(pjob->ji_numnodes == 2);
   fail_unless(pjob->ji_numvnod == 20);
 
@@ -353,34 +486,34 @@ END_TEST
 START_TEST(test_check_pwd_euser)
   {
   job *pjob = (job *)calloc(1, sizeof(job));
-  struct passwd *pwd = NULL;
+  bool pwd = false;
 
   pwd = check_pwd(pjob);
-  fail_unless(pwd == NULL, "check_pwd succeeded with an empty job");
+  fail_unless(pwd == false, "check_pwd succeeded with an empty job");
 
   bad_pwd = true;
-  decode_str(&pjob->ji_wattr[JOB_ATR_euser], "euser", NULL, "dbeer", 0);
+  decode_str(&pjob->ji_wattr[JOB_ATR_euser], "euser", NULL, "rightsaidfred", 0);
   pwd = check_pwd(pjob);
-  fail_unless(pwd == NULL, "bad pwd fail");
+  fail_unless(pwd == false, "bad pwd fail");
 
   bad_pwd = false;
   fail_init_groups = true;
   decode_str(&pjob->ji_wattr[JOB_ATR_euser], "euser", NULL, "dbeer", 0);
   pwd = check_pwd(pjob);
-  fail_unless(pwd == NULL, "bad grp fail");
+  fail_unless(pwd == false, "bad grp fail");
 
   pjob->ji_grpcache = NULL;
   fail_init_groups = false;
   fail_site_grp_check = true;
   decode_str(&pjob->ji_wattr[JOB_ATR_euser], "euser", NULL, "dbeer", 0);
   pwd = check_pwd(pjob);
-  fail_unless(pwd == NULL, "bad site fail");
+  fail_unless(pwd == false, "bad site fail");
   
   pjob->ji_grpcache = NULL;
   fail_site_grp_check = false;
   decode_str(&pjob->ji_wattr[JOB_ATR_euser], "euser", NULL, "dbeer", 0);
   pwd = check_pwd(pjob);
-  fail_unless(pwd != NULL);
+  fail_unless(pwd == true);
   }
 END_TEST
 
@@ -488,10 +621,13 @@ Suite *start_exec_suite(void)
 
   tc_core = tcase_create("test_check_pwd_euser");
   tcase_add_test(tc_core, test_check_pwd_euser);
+  tcase_add_test(tc_core, test_read_launcher_child_status);
   suite_add_tcase(s, tc_core);
 
   tc_core = tcase_create("test_check_pwd_no_user");
   tcase_add_test(tc_core, test_check_pwd_no_user);
+  tcase_add_test(tc_core, process_launcher_child_status_test);
+  tcase_add_test(tc_core, update_task_and_job_states_after_launch_test);
   suite_add_tcase(s, tc_core);
 
   tc_core = tcase_create("test_check_pwd_adaptive_user");
@@ -505,6 +641,11 @@ Suite *start_exec_suite(void)
 
   tc_core = tcase_create("test_get_num_nodes_ppn");
   tcase_add_test(tc_core, test_get_num_nodes_ppn);
+  tcase_add_test(tc_core, test_setup_process_launch_pipes);
+  tcase_add_test(tc_core, test_read_launcher_child_status);
+#ifdef PENABLE_LINUX_CGROUPS
+  tcase_add_test(tc_core, get_memory_limit_from_resource_list_test);
+#endif
   suite_add_tcase(s, tc_core);
 
   return s;

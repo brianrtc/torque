@@ -79,10 +79,11 @@
 
 
 #include <limits.h>
+#include <string>
 
 #include "resmon.h"
 #include "pbs_ifl.h"
-
+#include "mom_func.h"
 
 
 #define PBS_PROLOG_TIME             300
@@ -95,7 +96,7 @@
 
 
 
-extern int              thread_unlink_calls;
+extern bool             thread_unlink_calls;
 extern int              ignwalltime;
 extern int              ignmem;
 extern int              igncput;
@@ -137,6 +138,7 @@ extern int              is_login_node;
 extern int              job_exit_wait_time;
 extern char             jobstarter_exe_name[];
 extern int              jobstarter_set;
+extern int              jobstarter_privileged;
 extern char            *server_alias;
 extern char            *TRemChkptDirList[TMAX_RCDCOUNT];
 extern char             tmpdir_basename[MAXPATHLEN];  /* for $TMPDIR */
@@ -150,7 +152,7 @@ extern char             MOMConfigVersion[64];
 extern int              MOMConfigDownOnError;
 extern int              MOMConfigRestart;
 extern double           wallfactor;
-extern struct cphosts  *pcphosts;
+extern std::vector<cphosts> pcphosts;
 extern long             pe_alarm_time;
 extern char             DEFAULT_UMASK[1024];
 extern char             PRE_EXEC[1024];
@@ -171,6 +173,7 @@ extern int              max_join_job_wait_time;
 extern int              resend_join_job_wait_time;
 extern int              mom_hierarchy_retry_time;
 extern int              MOMJobDirStickySet;
+extern std::string      presetup_prologue;
 
 struct specials
   {
@@ -196,6 +199,7 @@ unsigned long setmempressthr(const char *);
 unsigned long setmempressdur(const char *);
 #endif
 int read_config(char *file);
+void reset_config_vars();
 
 
 

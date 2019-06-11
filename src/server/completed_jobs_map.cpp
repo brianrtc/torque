@@ -9,6 +9,10 @@
 #include "completed_jobs_map.h"
 #include "threadpool.h"
 
+// This is set to true once we've begun exiting. At this point, global destructors have been
+// called and we want to ignore requests
+extern bool exit_called;
+
 // external functions called
 
 void handle_complete_second_time(struct work_task*);
@@ -64,6 +68,9 @@ bool completed_jobs_map_class::delete_job_unlocked(
   std::string jid_string)
 
   {
+  if (exit_called == true)
+    return(true);
+  
   bool rc = true;
 
   // remove job from map if present
@@ -88,6 +95,9 @@ bool completed_jobs_map_class::delete_job(
   const char *jobid)
 
   {
+  if (exit_called == true)
+    return(true);
+  
   bool rc;
   std::string jid_string = jobid;
 
@@ -109,6 +119,9 @@ bool completed_jobs_map_class::is_job_id_in_map(
   const char *jobid)
 
   {
+  if (exit_called == true)
+    return(true);
+  
   bool rc = false;
   std::string jid_string = jobid;
 
@@ -133,6 +146,9 @@ int completed_jobs_map_class::cleanup_completed_jobs(
   void)
 
   {
+  if (exit_called == true)
+    return(PBSE_NONE);
+  
   time_t now;
   std::vector<std::string> to_remove;
   char log_buf[LOCAL_LOG_BUF_SIZE + 1];
@@ -146,22 +162,39 @@ int completed_jobs_map_class::cleanup_completed_jobs(
 
   // clean up any jobs that are beyond their adjusted completion time
   for (std::map<std::string,time_t>::iterator it = completed_jobs_map.begin();
-    it != completed_jobs_map.end();
-    ++it)
+       it != completed_jobs_map.end();
+       ++it)
     {
+    bool rc = false;
+
     // if cleanup time is before/at now, then clean up
     if (it->second <= now)
       {
+      int retcode = PBSE_NONE;
       work_task *pnew;
 
       // Does job exist
-      if (job_id_exists(it->first) == false)
+      
+      while((rc = job_id_exists(it->first, &retcode)) == false)
         {
-        // Job is gone, mark it for removal
-        to_remove.push_back(it->first);
-
-        continue;
+        if (retcode != 0)
+          {
+          // Someone else has a lock we want. give ours up and try again
+          pthread_mutex_unlock(&completed_jobs_map_mutex);
+          pthread_mutex_lock(&completed_jobs_map_mutex);
+          continue;
+          }
+        else
+          break;
         }
+
+        if (rc == false)
+          {
+          // Job is gone, mark it for removal
+          to_remove.push_back(it->first);
+
+          continue;
+          }
 
       // create a work task struct to be passed to handle_complete_second_time()
       if ((pnew = (struct work_task *)calloc(1, sizeof(struct work_task))) == NULL)
@@ -225,6 +258,9 @@ void completed_jobs_map_class::print_map(
   void)
 
   {
+  if (exit_called == true)
+    return;
+
   if (completed_jobs_map.empty())
     {
     printf("completed jobs map is empty\n");
@@ -257,6 +293,9 @@ void add_to_completed_jobs(
     completed_jobs_map.add_job(jobid, time(NULL) + delay);
     free(jobid);
     }
+
+  free(ptask->wt_mutex);
+  free(ptask);
 
   } // END add_to_completed_jobs()
 

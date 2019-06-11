@@ -11,6 +11,8 @@
 extern int log_event_called;
 
 char log_buffer[16384];
+std::string msg_err;
+int  LOGLEVEL;
 
 
 void log_err(int errnum, const char *routine, const char *msg) {}
@@ -24,6 +26,17 @@ void log_event(
 
   {
   log_event_called = 1;
+  }
+
+void log_record(
+
+  int         eventtype,  /* I */
+  int         objclass,   /* I */
+  const char *objname,    /* I */
+  const char *text)       /* I */
+
+  {
+  msg_err = text;
   }
 
 
@@ -66,4 +79,15 @@ int find_error_type(
 
   {
   return(0);
+  }
+
+int translate_range_string_to_vector(
+
+  const char       *range_string,
+  std::vector<int> &indices)
+
+  {
+  indices.push_back(6142);
+  indices.push_back(6143);
+  return(PBSE_NONE);
   }

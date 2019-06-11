@@ -17,6 +17,8 @@
 #include "threadpool.h"
 #include "mom_hierarchy_handler.h"
 #include "completed_jobs_map.h"
+#include "acl_special.hpp"
+#include "authorized_hosts.hpp"
 
 bool exit_called = false;
 pthread_mutex_t *job_log_mutex;
@@ -61,7 +63,7 @@ long job_log_size(void)
   exit(1);
   }
 
-char *parse_servername(char *name, unsigned int *service)
+char *parse_servername(const char *name, unsigned int *service)
   {
   fprintf(stderr, "The call to parse_servername needs to be mocked!!\n");
   exit(1);
@@ -94,7 +96,7 @@ int decode_b(pbs_attribute *patr, const char *name, const char *rescn, const cha
   exit(1);
   }
 
-pbs_net_t get_hostaddr(int *local_errno, char *hostname)
+pbs_net_t get_hostaddr(int *local_errno, const char *hostname)
   {
   fprintf(stderr, "The call to get_hostaddr needs to be mocked!!\n");
   exit(1);
@@ -368,6 +370,11 @@ int get_svr_attr_l(int index, long *l)
   return(0);
   }
 
+int get_svr_attr_b(int index, bool *b)
+  {
+  return(0);
+  }
+
 void *send_hierarchy_threadtask(void *vp)
   {
   return(NULL);
@@ -499,7 +506,7 @@ void *remove_extra_recycle_jobs(void *)
   return(NULL);
   }
   
-void mom_hierarchy_handler::checkAndSendHierarchy(void)
+void mom_hierarchy_handler::checkAndSendHierarchy(bool first_time)
   {
   }
 
@@ -508,3 +515,7 @@ void clear_all_alps_reservations() {}
 completed_jobs_map_class::completed_jobs_map_class() {}
 completed_jobs_map_class::~completed_jobs_map_class() {}
 void *remove_completed_jobs(void *vp) {return(NULL);}
+
+acl_special::acl_special() {}
+
+authorized_hosts::authorized_hosts() {}

@@ -12,6 +12,7 @@
 #include "work_task.h" /* work_task */
 #include "queue.h"
 
+const int DEFAULT_IDLE_SLOT_LIMIT = 300;
 const char *msg_illregister = "Illegal op in register request received for job %s";
 const char *msg_registerdel = "Job deleted as result of dependency on job %s";
 char server_name[PBS_MAXSERVERNAME + 1];
@@ -105,10 +106,9 @@ long calc_job_cost(job *pjob)
   return(0);
   }
 
-job_array *get_array(char *id)
+job_array *get_array(const char *id)
   {
-  fprintf(stderr, "The call to get_array to be mocked!!\n");
-  exit(1);
+  return(NULL);
   }
 
 void req_reject(int code, int aux, struct batch_request *preq, const char *HostName, const char *Msg) {}
@@ -167,7 +167,7 @@ void append_link(tlist_head *head, list_link *new_link, void *pobj)
   new_link->ll_prior->ll_next = new_link; /* now visible to forward iteration */
   }
 
-int issue_to_svr(char *servern, struct batch_request *preq, void (*replyfunc)(struct work_task *))
+int issue_to_svr(const char *servern, struct batch_request **preq, void (*replyfunc)(struct work_task *))
   {
   fprintf(stderr, "The call to issue_to_svr to be mocked!!\n");
   exit(1);
@@ -288,6 +288,14 @@ int get_svr_attr_l(int index, long *l)
   return(0);
   }
 
+int get_svr_attr_b(int index, bool *b)
+  {
+  if (svr == 10)
+    *b = false;
+
+  return(0);
+  }
+
 pbs_queue *get_jobs_queue(job **pjob)
   {
   return((*pjob)->ji_qhdr);
@@ -337,7 +345,7 @@ int safe_strncat(char *str, const char *to_append, size_t space_remaining)
 pbs_net_t get_hostaddr(
 
   int  *local_errno, /* O */    
-  char *hostname)    /* I */
+  const char *hostname)    /* I */
 
   {
   return(0);
@@ -345,23 +353,7 @@ pbs_net_t get_hostaddr(
 
 job *job_alloc(void)
   {
-  job *pj = (job *)calloc(1, sizeof(job));
-
-  if (pj == NULL)
-    {
-    return(NULL);
-    }
-
-  pj->ji_mutex = (pthread_mutex_t *)calloc(1, sizeof(pthread_mutex_t));
-
-  pj->ji_qs.qs_version = PBS_QS_VERSION;
-
-  pj->ji_rejectdest = new std::vector<std::string>();
-
-  pj->ji_is_array_template = FALSE;
-
-  pj->ji_momhandle = -1;
-
+  job *pj =  new job();
   return(pj);
   }
 
@@ -383,3 +375,24 @@ int is_svr_attr_set(int index)
   return(is_attr_set);
   }
 
+job::job() : ji_rejectdest()
+  {
+  }
+
+job::~job() {}
+
+array_info::array_info() : struct_version(ARRAY_QS_STRUCT_VERSION), array_size(0), num_jobs(0),
+                           slot_limit(NO_SLOT_LIMIT), jobs_running(0), jobs_done(0), num_cloned(0),
+                           num_started(0), num_failed(0), num_successful(0), num_purged(0),
+                           num_idle(0), deps(),
+                           idle_slot_limit(DEFAULT_IDLE_SLOT_LIMIT), highest_id_created(-1),
+                           range_str()
+
+  {
+  }
+
+job_array::job_array() : job_ids(NULL), jobs_recovered(0), ai_ghost_recovered(false), uncreated_ids(),
+                         ai_mutex(NULL), ai_qs()
+
+  {
+  }

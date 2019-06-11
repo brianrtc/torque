@@ -8,6 +8,7 @@
 #include "work_task.h" /* work_task, all_tasks */
 #include "server.h"
 
+bool cray_enabled;
 const char    *msg_jobrerun = "Job Rerun";
 attribute_def  job_attr_def[10];
 const char    *msg_manager = "%s at request of %s@%s";
@@ -22,7 +23,7 @@ void account_record(int acctype, job *pjob, const char *text)
   exit(1);
   }
 
-char *parse_servername(char *name, unsigned int *service)
+char *parse_servername(const char *name, unsigned int *service)
   {
   fprintf(stderr, "The call to parse_servername to be mocked!!\n");
   exit(1);
@@ -121,11 +122,16 @@ int get_svr_attr_l(int index, long *l)
   return(0);
   }
 
+int get_svr_attr_b(int index, bool *b)
+  {
+  return(0);
+  }
+
 void log_err(int errnum, const char *routine, const char *text) {}
 void log_record(int eventtype, int objclass, const char *objname, const char *text) {}
 void log_event(int eventtype, int objclass, const char *objname, const char *text) {}
 
-void free_nodes(job *pjob) {}
+void free_nodes(job *pjob, const char *spec) {}
 
 int svr_job_purge(job *pjob, int leaveSpoolFiles)
   {
@@ -163,4 +169,16 @@ job *next_job(
   job *pjob = (job *)calloc(1, sizeof(job));
   pjob->ji_mutex = (pthread_mutex_t *)calloc(1, sizeof(pthread_mutex_t));
   return(pjob);
+  }
+
+job::job() {}
+job::~job() {}
+
+batch_request *duplicate_request(
+
+  batch_request *preq,      /* I */
+  int            job_index) /* I - optional */
+
+  {
+  return(NULL);
   }

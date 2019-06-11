@@ -4,7 +4,6 @@
 #include <limits.h> /* _POSIX_PATH_MAX */
 
 #include "attribute.h" /* attribute_def */
-#include "dynamic_string.h" /* dynamic_string */
 #include "pbs_job.h"
 #include "queue.h"
 
@@ -12,6 +11,7 @@ char *acct_file;
 char path_acct[_POSIX_PATH_MAX];
 attribute_def job_attr_def[10];
 int LOGLEVEL=0;
+bool cray_enabled;
 
 int log_remove_old(char *DirPath, unsigned long ExpireTime) 
   {
@@ -31,24 +31,6 @@ void *get_next(list_link pl, char *file, int line)
   exit(1);
   }
 
-int append_dynamic_string(dynamic_string *ds, const char *to_append)
-  {
-  fprintf(stderr, "The call to append_dynamic_string needs to be mocked!!\n");
-  exit(1);
-  }
-
-dynamic_string *get_dynamic_string(int initial_size, const char *str)
-  {
-  fprintf(stderr, "The call to attr_to_str needs to be mocked!!\n");
-  exit(1);
-  }
-
-void free_dynamic_string(dynamic_string *ds)
-  {
-  fprintf(stderr, "The call to attr_to_str needs to be mocked!!\n");
-  exit(1);
-  }
-
 int unlock_queue(pbs_queue *the_queue, const char *id, const char *msg, int logging)
   {
   return(0);
@@ -60,6 +42,11 @@ pbs_queue *get_jobs_queue(job **pjob)
   }
 
 int get_svr_attr_l(int index, long *l)
+  {
+  return(0);
+  }
+
+int get_svr_attr_b(int index, bool *b)
   {
   return(0);
   }
@@ -83,7 +70,7 @@ int is_whitespace(
     return(FALSE);
   } /* END is_whitespace */
 
-void translate_range_string_to_vector(
+int translate_range_string_to_vector(
 
   const char       *range_string,
   std::vector<int> &indices)
@@ -125,4 +112,18 @@ void translate_range_string_to_vector(
     }
 
   free(str);
+  return(PBSE_NONE);
   } /* END translate_range_string_to_vector() */
+
+int lock_ji_mutex(job *pjob, const char *id, const char *msg, int logging)
+  {
+  return(0);
+  }
+
+int unlock_ji_mutex(job *pjob, const char *id, const char *msg, int logging)
+  {
+  return(0);
+  }
+
+job::job() {}
+job::~job() {}

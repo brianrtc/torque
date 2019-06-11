@@ -1,7 +1,10 @@
 #include "license_pbs.h" /* See here for the software license */
+#include <pbs_config.h>
 #include <stdlib.h>
 #include <stdio.h> /* fprintf */
 #include <pthread.h> /* pthread */
+#include <sys/types.h>
+#include <grp.h>
 
 #include "queue.h" /* all_queues, pbs_queue */
 #include "attribute.h" /* pbs_attribute */
@@ -12,6 +15,15 @@
 #include "sched_cmds.h" /* SCH_SCHEDULE_NULL */
 #include "list_link.h" /* list_link */
 #include "pbs_nodes.h"
+#include "complete_req.hpp"
+#include "attr_req_info.hpp"
+#include "machine.hpp"
+#include "log.h"
+#include "utils.h"
+
+all_nodes               allnodes;
+bool possible = false;
+bool cray_enabled = false;
 
 
 bool exit_called = false;
@@ -36,6 +48,12 @@ struct pbsnode *alps_reporter;
 user_info_holder users;
 int decrement_count;
 job napali_job;
+std::string set_resource;
+const char *incompatible_l[] = { "nodes", "size", "mppwidth", "mem", "hostlist",
+                                 "ncpus", "procs", "pvmem", "pmem", "vmem", "reqattr",
+                                 "software", "geometry", "opsys", "tpn", "trl", NULL };
+bool get_jobs_queue_force_null = false;
+std::string global_log_buf;
 
 
 void remove_server_suffix(
@@ -97,6 +115,9 @@ long attr_ifelse_long(pbs_attribute *attr1, pbs_attribute *attr2, long deflong)
 pbs_queue *get_jobs_queue(job **pjob)
   {
   pbs_queue *pq = (pbs_queue *)calloc(1, sizeof(pbs_queue));
+
+  if (get_jobs_queue_force_null)
+    return(NULL);
 
   pq->qu_qs.qu_type = QTYPE_Unset;
 
@@ -232,7 +253,11 @@ int site_acl_check(job *pjob, pbs_queue *pque)
 
 resource *find_resc_entry(pbs_attribute *pattr, resource_def *rscdf)
   {
-  return(0);
+  for (int i = 0; incompatible_l[i] != NULL; i++)
+    if (set_resource == incompatible_l[i])
+      return((resource *)1);
+
+  return(NULL);
   }
 
 job *svr_find_job(const char *jobid, int get_subjob)
@@ -338,6 +363,11 @@ int get_svr_attr_l(int attr_index, long *l)
   return(0);
   }
 
+int get_svr_attr_b(int index, bool *b)
+  {
+  return(0);
+  }
+
 int lock_node(struct pbsnode *the_node, const char *id, const char *msg, int logging)
   {
   return(0);
@@ -348,7 +378,11 @@ int unlock_node(struct pbsnode *the_node, const char *id, const char *msg, int l
   return(0);
   }
 
-void log_err(int errnum, const char *routine, const char *text) {}
+void log_err(int errnum, const char *routine, const char *text)
+  {
+  global_log_buf = text;
+  }
+
 void log_record(int eventtype, int objclass, const char *objname, const char *text) {}
 void log_event(int eventtype, int objclass, const char *objname, const char *text) {}
 
@@ -362,7 +396,7 @@ int initialize_procct(job *pjob)
   return(0);
   }
 
-void free_nodes(job *pjob) {}
+void free_nodes(job *pjob, const char *spec) {}
 
 int comp_size(struct pbs_attribute *attr, struct pbs_attribute *with)
   {
@@ -426,7 +460,7 @@ int decode_tokens(pbs_attribute *patr, const char *name, const char *rescn, cons
 
 int get_svr_attr_arst(int index, struct array_strings **arst)
   {
-  return(0);
+  return(-1);
   }
 
 int encode_size(pbs_attribute *attr, tlist_head *phead, const char *atname, const char *rsname, int mode, int perm)
@@ -451,3 +485,260 @@ char *csv_nth(const char *csv_str, int n)
   exit(1);
   }
 
+int is_whitespace(
+
+  char c)
+
+  {
+  if ((c == ' ')  ||
+      (c == '\n') ||
+      (c == '\t') ||
+      (c == '\r') ||
+      (c == '\f'))
+    return(TRUE);
+  else
+    return(FALSE);
+  } /* END is_whitespace */
+
+
+void move_past_whitespace(
+
+  char **str)
+
+  {
+  if ((str == NULL) ||
+      (*str == NULL))
+    return;
+
+  char *current = *str;
+
+  while (is_whitespace(*current) == TRUE)
+    current++;
+
+  *str = current;
+  } // END move_past_whitespace()
+
+
+int translate_range_string_to_vector(
+
+  const char       *range_string,
+  std::vector<int> &indices)
+
+  {
+  char *str = strdup(range_string);
+  char *ptr = str;
+  int   prev;
+  int   curr;
+
+  while (*ptr != '\0')
+    {
+    prev = strtol(ptr, &ptr, 10);
+    
+    if (*ptr == '-')
+      {
+      ptr++;
+      curr = strtol(ptr, &ptr, 10);
+
+      while (prev <= curr)
+        {
+        indices.push_back(prev);
+
+        prev++;
+        }
+
+      if ((*ptr == ',') ||
+          (is_whitespace(*ptr)))
+        ptr++;
+      }
+    else
+      {
+      indices.push_back(prev);
+
+      if ((*ptr == ',') ||
+          (is_whitespace(*ptr)))
+        ptr++;
+      }
+    }
+
+  free(str);
+  return(PBSE_NONE);
+  } /* END translate_range_string_to_vector() */
+
+void create_size_string(
+
+  char *buf, 
+  struct size_value values)
+
+  {
+  }
+
+int to_size(
+
+  const char        *val,   /* I */
+  struct size_value *psize) /* O */
+
+  {
+  return(0);
+  }
+
+PCI_Device::PCI_Device() {}
+PCI_Device::~PCI_Device() {}
+Socket::Socket() {}
+Socket::~Socket() {}
+Chip::Chip() {}
+Chip::~Chip() {}
+Core::Core() {}
+Core::~Core() {}
+
+void reinitialize_node_iterator(
+
+  node_iterator *iter)
+
+  {
+  if (iter != NULL)
+    {
+    iter->node_index = NULL;
+    iter->numa_index = -1;
+    iter->alps_index = NULL;
+    }
+  } /* END reinitialize_node_iterator() */
+
+bool Machine::check_if_possible(int &sockets, int &numa_nodes, int &cores, int &threads) const
+  {
+  return(possible);
+  }
+
+#ifdef PENABLE_LINUX_CGROUPS
+pbsnode::pbsnode() : nd_layout()
+#else
+pbsnode::pbsnode()
+#endif
+
+  {
+  }
+
+struct pbsnode *next_node(
+    
+  all_nodes     *an,
+  pbsnode       *pnode,
+  node_iterator *ni)
+
+  {
+  static int next_node_count = 0;
+  static pbsnode *pn = new pbsnode();
+
+  if (next_node_count++ % 2 == 0)
+    return(pn);
+  else
+    return(NULL);
+  }
+
+
+void free_grname(
+
+  struct group *grp,
+  char         *user_buf)
+
+  {
+  if (user_buf)
+    {
+    free(user_buf);
+    user_buf = NULL;
+    }
+
+  if (grp)
+    {
+    free(grp);
+    grp = NULL;
+    }
+
+  }
+
+
+struct group *getgrnam_ext(
+
+  char **user_buf,
+  char *grp_name) /* I */
+
+  {
+  struct group *grp;
+  char  *buf;
+  long   bufsize;
+  struct group *result;
+  int rc;
+
+  *user_buf = NULL;
+  if (grp_name == NULL)
+    return(NULL);
+
+  bufsize = sysconf(_SC_GETGR_R_SIZE_MAX);
+  if (bufsize == -1)
+    bufsize = 8196;
+
+  buf = (char *)malloc(bufsize);
+  if (buf == NULL)
+    {
+    log_event(PBSEVENT_JOB, PBS_EVENTCLASS_JOB, __func__, "failed to allocate memory");
+    return(NULL);
+    }
+
+  int alloc_size = sizeof(struct group);
+  grp = (struct group *)calloc(1, alloc_size);
+  if (grp == NULL)
+    {
+    log_event(PBSEVENT_JOB, PBS_EVENTCLASS_JOB, __func__, "could not allocate passwd structure");
+    free(buf);
+    return(NULL);
+    }
+
+  rc = getgrnam_r(grp_name, grp, buf, bufsize, &result);
+  if ((rc) ||
+      (result == NULL))
+    {
+    /* See if a number was passed in instead of a name */
+    if (isdigit(grp_name[0]))
+      {
+      rc = getgrgid_r(atoi(grp_name), grp, buf, bufsize, &result);
+      if ((rc == 0) &&
+          (result != NULL))
+        {
+        *user_buf = buf;
+        return(grp);
+        }
+      }
+
+    sprintf(buf, "getgrnam_r failed: %d", rc);
+    log_event(PBSEVENT_JOB, PBS_EVENTCLASS_JOB, __func__, buf);
+
+    free(buf);
+    free(grp);
+
+    return (NULL);
+    }
+
+  *user_buf = buf;
+  return(grp);
+  } /* END getgrnam_ext() */
+
+Machine::Machine() {}
+
+
+int pbsnode::lock_node(const char *id, const char *msg, int level)
+  {
+
+  return(0);
+  }
+
+
+int pbsnode::unlock_node(const char *id, const char *msg, int level)
+  {
+
+  return(0);
+  }
+
+job::job() {}
+job::~job() {}
+
+#include "../../lib/Libattr/req.cpp"
+#include "../../lib/Libattr/complete_req.cpp"
+#include "../../lib/Libattr/attr_req_info.cpp"

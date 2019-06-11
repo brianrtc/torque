@@ -7,6 +7,7 @@
 #include "execution_slot_tracker.hpp"
 #include "attribute.h" /* svrattrl */
 #include "id_map.hpp"
+#include "pbs_nodes.h"
 
 id_map    job_mapper;
 
@@ -55,7 +56,7 @@ void populate_range_string_from_slot_tracker(
   }
 
 
-int ctnodes(char *spec)
+int ctnodes(const char *spec)
   {
   fprintf(stderr, "The call to append_link needs to be mocked!!\n");
   exit(1);
@@ -138,3 +139,6 @@ char *csv_find_string(
   {
   return(NULL);
   }
+
+pbsnode::pbsnode() {}
+pbsnode::~pbsnode() {}

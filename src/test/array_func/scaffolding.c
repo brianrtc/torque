@@ -9,6 +9,7 @@
 #include "work_task.h" /* work_task */
 #include "array.h" /* job_array */
 #include "server.h" /* server */
+#include "mutex_mgr.hpp"
 
 const char *text_name              = "text";
 
@@ -19,6 +20,8 @@ const char *pbs_o_host = "PBS_O_HOST";
 struct server server;
 int LOGLEVEL = 7; /* force logging code to be exercised as tests run */
 int array_259_upgrade = 0;
+bool place_hold;
+int  unlocked;
 
 int job_save(job *pjob, int updatetype, int mom_port)
   {
@@ -44,10 +47,9 @@ void hold_job(pbs_attribute *temphold, void *j)
   exit(1);
   }
 
-int release_job(struct batch_request *preq, void *j)
+int release_job(struct batch_request *preq, void *j, job_array *pa)
   {
-  fprintf(stderr, "The call to release_job needs to be mocked!!\n");
-  exit(1);
+  return(0);
   }
 
 void post_modify_arrayreq(batch_request *br)
@@ -94,11 +96,13 @@ job *next_job(all_jobs *aj, all_jobs_iterator *iter)
   exit(1);
   }
 
-int attempt_delete(void *j)
+bool attempt_delete(void *j)
   {
   fprintf(stderr, "The call to attempt_delete needs to be mocked!!\n");
   exit(1);
   }
+
+void force_purge_work(job *pjob) {}
 
 void append_link(tlist_head *head, list_link *new_link, void *pobj)
   {
@@ -131,8 +135,7 @@ void svr_evaljobstate(job &pjob, int &newstate, int &newsub, int forceeval)
 
 char *get_correct_jobname(const char *jobid)
   {
-  fprintf(stderr, "The call to get_correct_jobname needs to be mocked!!\n");
-  exit(1);
+  return(strdup(jobid));
   }
 
 void *get_prior(list_link pl, char *file, int line)
@@ -149,7 +152,7 @@ void insert_link(struct list_link *old, struct list_link *new_link, void *pobj, 
 
 void *get_next(list_link pl, char *file, int line)
   {
-  return(pl.ll_next);
+  return(pl.ll_next->ll_struct);
   }
 
 char *threadsafe_tokenizer(char **str, const char *delims)
@@ -209,6 +212,11 @@ int get_svr_attr_l(int attr_index, long *l)
   return(0);
   }
 
+int get_svr_attr_b(int index, bool *b)
+  {
+  return(0);
+  }
+
 int is_svr_attr_set(int attr_index)
   {
   return(0);
@@ -217,7 +225,11 @@ int is_svr_attr_set(int attr_index)
 job *svr_find_job(const char *name, int get_subjob)
   {
   job *pjob = (job *)calloc(1, sizeof(job));
-  strcpy(pjob->ji_qs.ji_jobid, "1.napali");
+  strcpy(pjob->ji_qs.ji_jobid, name);
+
+  if (place_hold)
+    pjob->ji_wattr[JOB_ATR_hold].at_val.at_long = HOLD_l;
+
   return(pjob);
   }
 
@@ -228,6 +240,7 @@ int svr_job_purge(job *pjob, int leaveSpoolFiles)
 
 int unlock_ji_mutex(job *pjob, const char *id, const char *msg, int logging)
   {
+  unlocked++;
   return(0);
   }
 
@@ -296,3 +309,73 @@ int unlock_ss()
     }
 
 std::string get_path_jobdata(const char *a, const char *b) {return ""; }
+
+job::job() {}
+job::~job() {}
+
+int translate_range_string_to_vector(
+
+  const char       *range_string,
+  std::vector<int> &indices)
+
+  {
+  char *str = strdup(range_string);
+  char *ptr = str;
+  int   prev = 0;
+  int   curr;
+  int   rc = PBSE_NONE;
+
+  while (*ptr != '\0')
+    {
+    char *old_ptr = ptr;
+    prev = strtol(ptr, &ptr, 10);
+
+    if (ptr == old_ptr)
+      {
+      // This means *ptr wasn't numeric, error. break out to prevent an infinite loop
+      rc = -1;
+      break;
+      }
+    
+    if (*ptr == '-')
+      {
+      ptr++;
+      curr = strtol(ptr, &ptr, 10);
+
+      while (prev <= curr)
+        {
+        indices.push_back(prev);
+
+        prev++;
+        }
+
+      while (*ptr == ',')
+        ptr++;
+      }
+    else
+      {
+      indices.push_back(prev);
+
+      while (*ptr == ',')
+        ptr++;
+      }
+    }
+
+  free(str);
+  
+  return(rc);
+  } /* END translate_range_string_to_vector() */
+
+int create_and_queue_array_subjob(
+    
+  job_array   *pa,
+  mutex_mgr   &array_mgr,
+  job         *template_job,
+  mutex_mgr   &template_job_mgr,
+  int          index,
+  std::string &prev_job_id,
+  bool         place_hold)
+
+  {
+  return(PBSE_NONE);
+  }

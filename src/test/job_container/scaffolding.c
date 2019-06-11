@@ -19,6 +19,11 @@ int get_svr_attr_l(int index, long *l)
   return(0);
   }
 
+int get_svr_attr_b(int index, bool *b)
+  {
+  return(0);
+  }
+
 int lock_ji_mutex(job *pjob, const char *id, const char *msg, int logging)
   {
   return(0);
@@ -41,25 +46,7 @@ int get_svr_attr_str(int index, char **str)
 
 job *job_alloc(void)
   {
-  job *pj = (job *)calloc(1, sizeof(job));
-
-  if (pj == NULL)
-    {
-    return(NULL);
-    }
-
-  pj->ji_mutex = (pthread_mutex_t *)calloc(1, sizeof(pthread_mutex_t));
-  pthread_mutex_init(pj->ji_mutex,NULL);
-  lock_ji_mutex(pj, __func__, NULL, LOGLEVEL);
-
-  pj->ji_qs.qs_version = PBS_QS_VERSION;
-
-  pj->ji_rejectdest = new std::vector<std::string>();
-  pj->ji_is_array_template = FALSE;
-
-  pj->ji_momhandle = -1;
-
-  return(pj);
+  return(new job());
   }
 
 id_map::id_map() 
@@ -74,3 +61,6 @@ const char *id_map::get_name(int id)
   {
   return(NULL);
   }
+
+job::job() {}
+job::~job() {}

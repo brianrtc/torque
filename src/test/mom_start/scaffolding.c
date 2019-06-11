@@ -86,3 +86,10 @@ int openpty (int *__amaster, int *__aslave, char *__name, const struct termios *
   }
 }
 #endif
+
+int kill_task(job *pjob, struct task *task, int sig, int pg)
+  {
+  return(0);
+  }
+
+void check_and_act_on_obit(job *pjob, int rank) {}

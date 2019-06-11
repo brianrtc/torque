@@ -12,7 +12,6 @@
 #include "mom_main.h" /* DEFAULT_SERVER_STAT_UPDATES */
 #include "log.h" /* MAXLINE, LOG_BUF_SIZE */
 #include "pbs_ifl.h" /* PBS_MAXHOSTNAME */
-#include "dynamic_string.h" /* dynamic_string */
 #include "u_tree.h" /* AvlTree */
 #include "net_connect.h" /* conn_type */
 #include "server_limits.h" /* pbs_net_t. Also defined in net_connect.h */
@@ -20,10 +19,14 @@
 #include "pbs_nodes.h" /* pbsnode */
 #include "pbs_config.h"
 #include "container.hpp"
+#include "machine.hpp"
 #include "dis.h"
+#include "mom_func.h"
+#include "authorized_hosts.hpp"
 
 #define MAXLINE 1024
 
+std::list<job *> alljobs_list;
 char log_buffer[LOG_BUF_SIZE];
 char *apbasil_protocol = NULL;
 char *apbasil_path = NULL;
@@ -78,10 +81,11 @@ nodeboard node_boards[MAX_NODE_BOARDS];
 int       numa_index;
 #endif
 
-#ifdef PENABLE_LINUX26_CPUSETS
+#ifdef PENABLE_LINUX_CGROUPS
 int              memory_pressure_threshold = 0; /* 0: off, >0: check and kill */
 short            memory_pressure_duration  = 0; /* 0: off, >0: check and kill */
 int              MOMConfigUseSMT           = 1; /* 0: off, 1: on */
+Machine this_node;
 //hwloc_topology_t topology;
 #endif
 
@@ -147,12 +151,6 @@ int read_tcp_reply(struct tcp_chan *chan, int protocol, int version, int command
 char *conf_res(char *resline, struct rm_attribute *attr)
   {
   fprintf(stderr, "The call to conf_res needs to be mocked!!\n");
-  exit(1);
-  }
-
-void clear_dynamic_string(dynamic_string *ds)
-  {
-  fprintf(stderr, "The call to clear_dynamic_string needs to be mocked!!\n");
   exit(1);
   }
 
@@ -243,9 +241,14 @@ int rpp_close(int index)
   exit(1);
   }
 
+int close(int fd)
+  {
+  return(0);
+  }
+
 int tcp_connect_sockaddr(struct sockaddr *sa, size_t sa_size, bool use_log)
   {
-  return 0;
+  return 100;
   }
 
 char *size_fs(char *param)
@@ -347,30 +350,6 @@ mom_hierarchy_t *initialize_mom_hierarchy()
   return(nt);
   }
 
-int append_dynamic_string(dynamic_string *ds, const char *to_append)
-  {
-  fprintf(stderr, "The call to append_dynamic_string to be mocked!!\n");
-  exit(1);
-  }
-
-dynamic_string *get_dynamic_string(int initial_size, const char *str)
-  {
-  fprintf(stderr, "The call to get_dynamic_string needs to be mocked!!\n");
-  exit(1);
-  }
-
-void free_dynamic_string(dynamic_string *ds)
-  {
-  fprintf(stderr, "The call to attr_to_str needs to be mocked!!\n");
-  exit(1);
-  }
-
-int delete_last_word_from_dynamic_string(dynamic_string *ds)
-  {
-  fprintf(stderr, "The call to delete_last_word_from_dynamic_string needs to be mocked!!\n");
-  exit(1);
-  }
-
 void send_update_soon()
   {
   fprintf(stderr, "The call to send_update_soon needs to be mocked!!\n");
@@ -412,6 +391,34 @@ int pbs_getaddrinfo(
   return(0);
   }
 
+Machine::Machine()
+  {
+  }
+
+Machine::~Machine()
+  {
+  }
+
+void Machine::displayAsJson(std::stringstream &out, bool jobs) const {}
+
+Socket::Socket()
+  {
+  }
+
+Socket::~Socket()
+  {
+  }
+
+Chip::Chip(){}
+Chip::~Chip(){}
+
+Core::Core(){}
+Core::~Core(){}
+
+PCI_Device::PCI_Device(){}
+PCI_Device::~PCI_Device(){}
+
+
 time_t get_stat_update_interval()
 
   {
@@ -427,3 +434,36 @@ bool overwrite_cache(
   {
   return(true);
   }
+
+/*int gethostname(char *name, size_t len)
+  {
+  strcpy(name, "fattony3.ac");
+  return(0);
+  }*/
+
+int add_gpu_status(std::vector<std::string> &mom_status)
+  {
+  return(0);
+  }
+
+
+#ifdef USE_RESOURCE_PLUGIN
+void report_node_generic_resources(std::map<std::string, unsigned int> &gres) {}
+void report_node_generic_metrics(std::map<std::string, double> &gmetrics) {}
+void report_node_varattrs(std::map<std::string, std::string> &varattrs) {}
+void report_node_features(std::set<std::string> &features) {}
+#endif
+
+bool authorized_hosts::is_authorized(unsigned long addr)
+  {
+  return(true);
+  }
+
+void authorized_hosts::list_authorized_hosts(std::string &output) {}
+
+void authorized_hosts::add_authorized_address(unsigned long addr, unsigned short port, const std::string &hostname) {}
+
+void authorized_hosts::clear() {}
+
+authorized_hosts::authorized_hosts() {}
+authorized_hosts auth_hosts;

@@ -11,7 +11,9 @@
 #include "pbs_job.h" /* job */
 #include "batch_request.h" /* batch_request */
 #include "libpbs.h" /* job_file */
+#include "mom_func.h"
 
+std::list<job *> alljobs_list;
 const char *PJobSubState[10];
 char *path_jobs;
 const char *msg_script_write = "Unable to write script file";
@@ -30,6 +32,7 @@ int LOGLEVEL = 7; /* force logging code to be exercised as tests run */
 int PBSNodeCheckProlog = 0;
 char log_buffer[LOG_BUF_SIZE];
 int reject_job_submit = 0;
+int use_nvidia_gpu = TRUE;
 
 // sensing variables
 char prefix[PBS_JOBBASE+1];
@@ -53,7 +56,7 @@ void mom_job_purge(job *pjob)
   exit(1);
   }
 
-struct passwd *check_pwd(job *pjob)
+bool check_pwd(job *pjob)
   {
   fprintf(stderr, "The call to check_pwd needs to be mocked!!\n");
   exit(1);
@@ -107,10 +110,9 @@ void req_reject(int code, int aux, struct batch_request *preq, const char *HostN
   exit(1);
   }
 
-void start_exec(job *pjob)
+int start_exec(job *pjob)
   {
-  fprintf(stderr, "The call to start_exec needs to be mocked!!\n");
-  exit(1);
+  return(0);
   }
 
 void mom_server_all_update_stat(void)
@@ -142,7 +144,7 @@ resource_def *find_resc_def(resource_def *rscdf, const char *name, int limit)
   exit(1);
   }
 
-struct passwd * getpwnam_ext(char * user_name)
+struct passwd * getpwnam_ext(char **user_buf, char * user_name)
   {
   fprintf(stderr, "The call to getpwnam_ext needs to be mocked!!\n");
   exit(1);
@@ -188,7 +190,7 @@ job *mom_find_job(const char *jobid)
   return(NULL);
   }
 
-job *job_alloc(void)
+job *mom_job_alloc(void)
   {
   return((job *)calloc(1, sizeof(job)));
   }
@@ -219,3 +221,11 @@ ssize_t read_ac_socket(int fd, void *buf, ssize_t count)
   {
   return(0);
   }
+
+void remove_from_job_list(job *pjob) {}
+
+void free_pwnam(struct passwd *pwdp, char *buf)
+  {}
+
+void send_update_soon()
+  {}

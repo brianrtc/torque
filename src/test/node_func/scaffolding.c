@@ -3,6 +3,7 @@
 #include <stdio.h> /* fprintf */
 #include <netdb.h> /* addrinfo */
 #include <netinet/in.h>
+#include <pbs_config.h>
 
 
 #include "pbs_nodes.h" /* all_nodes, pbsnode */
@@ -20,11 +21,14 @@
 #include "id_map.hpp"
 #include "threadpool.h"
 #include "mom_hierarchy_handler.h"
+#include "machine.hpp"
+#include "authorized_hosts.hpp"
 
 std::string attrname;
 std::string attrval;
 int         created_subnode;
 
+bool cray_enabled;
 int svr_tsnodes = 0; 
 int svr_unresolvednodes = 0;
 resource_t next_resource_tag;
@@ -59,7 +63,6 @@ const char *dis_emsg[] = {"No error",
 };
 boost::ptr_vector<std::string> hierarchy_holder;
 pthread_mutex_t                 hierarchy_holder_Mutex = PTHREAD_MUTEX_INITIALIZER;
-extern int cray_enabled;
 
 mom_hierarchy_handler hierarchy_handler; //The global declaration.
 
@@ -75,19 +78,39 @@ void attrlist_free()
     }
   }
 
-svrattrl *attrlist_create(const char *aname, const char *rname, int vsize)
-  {
-  int namesize = 0;
-  if (aname != NULL)
-    namesize = strlen(aname) + 1;
-  s = (svrattrl *)calloc(1, sizeof(svrattrl) + namesize + vsize);
-  s->al_name = (char *)s + sizeof(svrattrl);
-  s->al_value = s->al_name + namesize;
+svrattrl *attrlist_create(
+  const char *aname, 
+  const char *rname, 
+  int vsize)
 
-  if (aname != NULL)
-    strcpy(s->al_name, aname); /* copy name right after struct */
+  {
+  size_t    asz;
+  size_t    rsz;
+
+  asz = strlen(aname) + 1;     /* pbs_attribute name,allow for null term */
+
+  if (rname == NULL)      /* resource name only if type resource */
+    rsz = 0;
+  else
+    rsz = strlen(rname) + 1;
+
+  s = attrlist_alloc(asz, rsz, vsize);
+
+  strcpy(s->al_name, aname); /* copy name right after struct */
+
+  if (rsz > 0)
+    strcpy(s->al_resc, rname);
+
   return(s);
+}
+
+void append_link(tlist_head *head, list_link *new_link, void *pobj)
+  {
+  svrattrl *pal = (svrattrl *)pobj;
+  attrname = pal->al_name;
+  attrval = pal->al_value;
   }
+
 
 AvlTree AVL_delete_node(u_long key, uint16_t port, AvlTree tree)
   {
@@ -105,20 +128,9 @@ int find_attr(struct attribute_def *attr_def, const char *name, int limit)
   return(0);
   }
 
-int mgr_set_node_attr(struct pbsnode *pnode, attribute_def *pdef, int limit, svrattrl *plist, int privil, int *bad, void *parent, int mode)
+int mgr_set_node_attr(struct pbsnode *pnode, attribute_def *pdef, int limit, svrattrl *plist, int privil, int *bad, void *parent, int mode, bool dont_update)
   {
   return(0);
-  }
-
-void free_prop_list(struct prop *prop)
-  {
-  struct prop *pp;
-  while (prop)
-    {
-    pp = prop->next;
-    free(prop);
-    prop = pp;
-    }
   }
 
 void *get_next(list_link pl, char *file, int line)
@@ -136,22 +148,13 @@ struct pbsnode *AVL_find(u_long key, uint16_t port, AvlTree tree)
   else
     {
     sprintf(buf, "%lu", key);
-    numa.nd_name = buf;
+    numa.change_name(buf);
     return(&numa);
     }
   }
 
 void free_attrlist(tlist_head *pattrlisthead)
   {
-  fprintf(stderr, "The call to free_attrlist needs to be mocked!!\n");
-  exit(1);
-  }
-
-void append_link(tlist_head *head, list_link *new_link, void *pobj)
-  {
-  svrattrl *pal = (svrattrl *)pobj;
-  attrname = pal->al_name;
-  attrval = pal->al_value;
   }
 
 char *pbs_strerror(int err)
@@ -224,6 +227,14 @@ int get_svr_attr_l(int index, long *l)
   return(0);
   }
 
+int get_svr_attr_b(int index, bool *b)
+  {
+  if (index == SRV_ATR_CrayEnabled)
+    *b = cray_enabled;
+
+  return(0);
+  }
+
 int add_conn(int sock, enum conn_type type, pbs_net_t addr, unsigned int port, unsigned int socktype, void *(*func)(void *))
   {
   return(0);
@@ -285,8 +296,7 @@ job *get_job_from_jobinfo(
 
 int insert_addr_name_info(
     struct addrinfo *,
-    const char *
-)
+    const char *)
 
   {
   return(0);
@@ -334,7 +344,7 @@ job *get_job_from_job_usage_info(job_usage_info *jui, struct pbsnode *pnode)
 struct pbsnode *create_alps_subnode(struct pbsnode *parent, const char *node_id)
   {
   created_subnode++;
-  return(NULL);
+  return(new pbsnode());
   }
 
 id_map::id_map() : counter(0) {}
@@ -456,11 +466,135 @@ struct batch_request *alloc_br(
   return(req);
   } /* END alloc_br() */
 
+void capture_until_close_character(
+
+  char        **start,
+  std::string  &storage,
+  char          end)
+
+  {
+  if ((start == NULL) ||
+      (*start == NULL))
+    return;
+
+  char *val = *start;
+  char *ptr = strchr(val, end);
+
+  // Make sure we found a close quote and this wasn't an empty string
+  if ((ptr != NULL) &&
+      (ptr != val))
+    {
+    storage = val;
+    storage.erase(ptr - val);
+    *start = ptr + 1; // add 1 to move past the character
+    }
+  } // capture_until_close_character()
+
+
 void free_br(struct batch_request *preq)
   {
   return;
   }
 
 void mom_hierarchy_handler::reloadHierarchy()
-{
-}
+  {
+  }
+
+#ifdef PENABLE_LINUX_CGROUPS
+int Machine::getDedicatedSockets() const
+  {
+  return(0);
+  }
+
+int Machine::getTotalThreads() const
+  {
+  return(0);
+  }
+
+int Machine::getDedicatedChips() const
+  {
+  return(0);
+  }
+
+int Machine::getTotalCores() const
+  {
+  return(0);
+  }
+
+int Machine::getDedicatedCores() const
+  {
+  return(0);
+  }
+
+int Machine::getDedicatedThreads() const
+  {
+  return(0);
+  }
+
+int Machine::getTotalSockets() const
+  {
+  return(0);
+  }
+
+int Machine::getTotalChips() const
+  {
+  return(0);
+  }
+
+bool Machine::is_initialized() const
+  {
+  return(true);
+  }
+
+Machine &Machine::operator =(const Machine &other)
+  {
+  return(*this);
+  }
+
+Machine::Machine() {}
+Machine::~Machine() {}
+
+PCI_Device::PCI_Device(const PCI_Device &other)
+  {
+  }
+
+PCI_Device::~PCI_Device() {}
+
+Chip::Chip(const Chip &other)
+  {
+  }
+
+Chip::~Chip() {}
+
+Core::~Core() {}
+
+allocation::allocation(const allocation &other) {}
+
+Socket::~Socket() {}
+
+#endif
+
+void update_node_state(pbsnode *pnode, int state) 
+  {
+  pnode->nd_state = state;
+  }
+
+int node_status_list(
+
+  pbs_attribute *new_attr,           /*derive status into this pbs_attribute*/
+  void          *pnode,         /*pointer to a pbsnode struct     */
+  int            actmode)       /*action mode; "NEW" or "ALTER"   */
+
+  {
+  return(0);
+  }
+
+void authorized_hosts::add_authorized_address(unsigned long addr, unsigned short port, const std::string &hostname) {}
+
+bool authorized_hosts::remove_address(unsigned long addr, unsigned short port)
+  {
+  return(true);
+  }
+
+authorized_hosts::authorized_hosts() {}
+authorized_hosts auth_hosts;

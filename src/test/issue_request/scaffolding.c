@@ -40,7 +40,7 @@ int pthread_mutex_unlock(pthread_mutex_t *mutex) throw()
   return(0);
   }
 
-char *parse_servername(char *name, unsigned int *service)
+char *parse_servername(const char *name, unsigned int *service)
   {
   return(NULL);
   }
@@ -55,10 +55,6 @@ int PBSD_gpu_put(int c, char *node, char *gpuid, int gpumode, int reset_perm, in
   return(0);
   }
 
-int PBSD_mgr_put(int c, int function, int command, int objtype, char *objname, struct attropl *aoplp, char *extend)
-  {
-  return(0);
-  }
 
 int encode_DIS_JobId(struct tcp_chan *chan, char *jobid)
   {
@@ -70,7 +66,7 @@ int encode_DIS_PowerState(struct tcp_chan *chan, unsigned short powerState)
   return(0);
   }
 
-pbs_net_t get_hostaddr(int *local_errno, char *hostname)
+pbs_net_t get_hostaddr(int *local_errno, const char *hostname)
   {
   if (return_addr == true)
     {
@@ -260,16 +256,11 @@ struct pbsnode dummynode;
 
 struct pbsnode *tfind_addr(const u_long key, uint16_t port, char *job_momname)
   {
-  memset(&dummynode,0,sizeof(dummynode));
+  dummynode.change_name("tmp");
   return &dummynode;
   }
 
 int encode_DIS_ReqExtend(struct tcp_chan *chan, char *extend)
-  {
-  return(0);
-  }
-
-int PBSD_sig_put(int c, char *jobid, char *signal, char *extend)
   {
   return(0);
   }
@@ -351,7 +342,7 @@ void log_err(int errnum, const char *routine, const char *text) {}
 void log_record(int eventtype, int objclass, const char *objname, const char *text) {}
 void log_event(int eventtype, int objclass, const char *objname, const char *text) {}
 
-int ctnodes(char *spec)
+int ctnodes(const char *spec)
   {
   return(0);
   }
@@ -505,4 +496,51 @@ batch_request *duplicate_request(batch_request *preq, int job_index)
       }
   
     return(preq_tmp);
+  }
+
+pbsnode::pbsnode() {}
+pbsnode::~pbsnode() {}
+int pbsnode::unlock_node(const char *id, const char *msg, int level)
+  {
+  return(0);
+  }
+
+void pbsnode::change_name(const char *name)
+  {
+  this->nd_name = name;
+  }
+
+const char *pbsnode::get_name() const
+  {
+  return(this->nd_name.c_str());
+  }
+
+job::job()
+  {
+  memset(this->ji_wattr, 0, sizeof(this->ji_wattr));
+  }
+
+job::~job() {}
+
+void update_failure_counts(
+
+  const char *node_name,
+  int         rc)
+
+  {
+  }
+
+int PBSD_sig_put(int c, const char *jobid, const char *signal, char *extend)
+  {
+  return(0);
+  }
+
+int PBSD_mgr_put(int c, int function, int command, int objtype, const char *objname, struct attropl *aoplp, char *extend)
+  {
+  return(0);
+  }
+
+void set_reply_type(struct batch_reply *preply, int type)
+  {
+  preply->brp_choice = type;
   }

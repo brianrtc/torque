@@ -101,7 +101,7 @@
 #include "../lib/Liblog/log_event.h"
 #include "../lib/Liblog/setup_env.h"
 #include "../lib/Liblog/chk_file_sec.h"
-#include "../lib/Libifl/lib_ifl.h"
+#include "lib_ifl.h"
 #include "list_link.h"
 #include "attribute.h"
 #include "server_limits.h"
@@ -119,13 +119,12 @@
 #include "csv.h"
 #include "pbs_nodes.h"
 #include "threadpool.h"
-#include "../lib/Libutils/u_lock_ctl.h" /* unlock_node */
 #include "queue_recov.h" /* que_recov_xml */
 #include "utils.h"
 #include "queue_recycler.h" /* queue_recycler */
 #include "svr_func.h" /* get_svr_attr_* */
 #include "login_nodes.h"
-#include "track_alps_reservations.h"
+#include "track_alps_reservations.hpp"
 #include "job_func.h" /* svr_job_purge */
 #include "net_cache.h"
 #include "ji_mutex.h"
@@ -191,6 +190,7 @@ extern char *path_svrdb_new;
 extern char *path_svrlog;
 extern char *path_track;
 extern char *path_nodes;
+extern char *path_node_usage;
 extern char *path_mom_hierarchy;
 extern char *path_nodes_new;
 extern char *path_nodestate;
@@ -199,10 +199,10 @@ extern char *path_nodenote;
 extern char *path_nodenote_new;
 extern char *path_checkpoint;
 extern char *path_jobinfo_log;
+extern char *path_pbs_environment;
 
 extern int                      queue_rank;
 extern char                     server_name[];
-extern tlist_head               svr_newnodes;
 extern std::list<timed_task>   *task_list_timed;
 extern pthread_mutex_t          task_list_timed_mutex;
 task_recycler                   tr;
@@ -236,11 +236,13 @@ extern int paused;
 extern int LOGLEVEL;
 extern char *plogenv;
 
+extern bool   use_path_home;
 extern struct server server;
 
 
 /* External Functions Called */
 
+void          save_node_usage(pbsnode *pnode);
 void          rel_resc(job *pjob);
 void          poll_job_task(work_task *);
 extern void   on_job_rerun_task(struct work_task *);
@@ -250,6 +252,8 @@ extern int    set_old_nodes(job *);
 extern struct work_task *apply_job_delete_nanny(struct job *, int);
 extern int     net_move(job *, struct batch_request *);
 void          on_job_exit_task(struct work_task *);
+int           update_user_acls(pbs_attribute *pattr, enum batch_op  op);
+int           update_group_acls(pbs_attribute *pattr, enum batch_op  op);
 
 /* Private functions in this file */
 
@@ -271,6 +275,9 @@ int   process_jobs_dirent(const char *);
 int   process_arrays_dirent(const char *, int);
 long  jobid_to_long(std::string);
 bool  is_array_job(std::string);
+
+bool  cray_enabled = false;
+bool  ghost_array_recovery = true;
 
 /* private data */
 
@@ -448,7 +455,7 @@ void  update_default_np()
       while (pnode->nd_slots.get_total_execution_slots() < default_np)
         add_execution_slot(pnode);
       
-      unlock_node(pnode, __func__, NULL, LOGLEVEL);
+      pnode->unlock_node(__func__, NULL, LOGLEVEL);
       }
 
     if (iter != NULL)
@@ -729,6 +736,54 @@ int setup_signal_handling()
   return(PBSE_NONE);
   } /* END setup_signal_handling() */
 
+// check divided jobs and arrays subdirectories for existence
+// Note: These are normally constructed during installation. See
+// mk_server_dirs() in buildutils/pbs_mkdirs.in.
+
+int mk_subdirs(
+
+  char **paths)
+
+  {
+  int         j;
+  char        log_buf[LOCAL_LOG_BUF_SIZE];
+
+  if (paths == NULL)
+    return(-1);
+
+  for (j = 0; paths[j] != NULL; j++)
+    {
+    int i;
+
+    for (i = 0; i <= 9; i++)
+      {
+      char buf[1024];
+
+      // build the complete path
+      snprintf(buf, sizeof(buf), "%s%d/", paths[j], i);
+
+      // try to make the directory
+      if (mkdir(buf, 0770) == 0)
+        {
+        // success - add log message
+        snprintf(log_buf, sizeof(log_buf), "created missing directory %s", buf);
+        log_ext(0, __func__, log_buf, LOG_INFO);
+        }
+      else if (errno != EEXIST)
+        {
+        // fail only if directory (or file) named by buf does not exist
+        snprintf(log_buf, sizeof(log_buf), "%s cannot create directory, errno=%d, %s",
+           buf,
+           errno,
+           strerror(errno));
+        log_err(-1, __func__, log_buf);
+        return(3);
+        }
+      }
+    }
+  return(PBSE_NONE);
+  }
+
 
 
 int initialize_paths()
@@ -739,18 +794,21 @@ int initialize_paths()
   const char        *new_tag = ".new";
   struct stat  statbuf;
   char         log_buf[LOCAL_LOG_BUF_SIZE];
+  bool         use_jobs_subdirs = false;
+  char        *paths[3] = { NULL };
 #if !defined(DEBUG) && !defined(NO_SECURITY_CHECK)
   char         EMsg[1024];
-  long         use_jobs_subdirs = FALSE;
 #endif /* not DEBUG and not NO_SECURITY_CHECK */
 
   if (path_priv == NULL)
     path_priv        = build_path(path_home, PBS_SVR_PRIVATE, suffix_slash);
 
   path_arrays        = build_path(path_priv, PBS_ARRAYDIR, suffix_slash);
+  paths[0]           = path_arrays;
   path_spool         = build_path(path_home, PBS_SPOOLDIR, suffix_slash);
   path_queues        = build_path(path_priv, PBS_QUEDIR,   suffix_slash);
   path_jobs          = build_path(path_priv, PBS_JOBDIR,   suffix_slash);
+  paths[1]           = path_jobs;
   path_credentials   = build_path(path_priv, PBS_CREDENTIALDIR, suffix_slash);
   path_acct          = build_path(path_priv, PBS_ACCT,     suffix_slash);
 
@@ -762,6 +820,7 @@ int initialize_paths()
   path_jobinfo_log   = build_path(path_home, PBS_JOBINFOLOGDIR, suffix_slash);
   path_track         = build_path(path_priv, PBS_TRACKING, NULL);
   path_nodes         = build_path(path_priv, NODE_DESCRIP, NULL);
+  path_node_usage    = build_path(path_priv, NODE_USAGE, suffix_slash);
   path_nodes_new     = build_path(path_priv, NODE_DESCRIP, new_tag);
   path_nodestate     = build_path(path_priv, NODE_STATUS,  NULL);
   path_nodepowerstate = build_path(path_priv, NODE_POWER_STATE,  NULL);
@@ -786,7 +845,7 @@ int initialize_paths()
   path_checkpoint    = build_path(path_home, PBS_CHKPTDIR, suffix_slash);
 #endif
 
-  /* check existance amd make sure it is a directory */
+  /* check existence and make sure it is a directory */
 
   if (stat(path_checkpoint, &statbuf) < 0)
     {
@@ -830,47 +889,47 @@ int initialize_paths()
       }
     }
 
-#if !defined(DEBUG) && !defined(NO_SECURITY_CHECK)
-
-  rc  = chk_file_sec(path_jobs,  1, 0, S_IWGRP | S_IWOTH, 1, EMsg);
-
   // get the use_jobs_subdirs value if set
-  get_svr_attr_l(SRV_ATR_use_jobs_subdirs, &use_jobs_subdirs);
+  get_svr_attr_b(SRV_ATR_use_jobs_subdirs, &use_jobs_subdirs);
+
+  // check divided jobs and arrays subdirectories for existence
+  if (use_jobs_subdirs == TRUE)
+    {
+    mk_subdirs(paths);
+    }
+
+#if !defined(DEBUG) && !defined(NO_SECURITY_CHECK)
 
   // check divided jobs subdirectories if needed
   if (use_jobs_subdirs == TRUE)
     {
-    int i;
+    int j;
 
-    for (i = 0; i <= 9; i++)
+    for (j = 0; paths[j] != NULL; j++)
       {
-      char buf[1024];
+      int i;
 
-      snprintf(buf, sizeof(buf), "%s%d/", path_jobs, i);
-      rc  |= chk_file_sec(buf,  1, 0, S_IWGRP | S_IWOTH, 1, EMsg);
+      rc |= chk_file_sec(paths[j],  1, 0, S_IWGRP | S_IWOTH, 1, EMsg);
+
+      for (i = 0; i <= 9; i++)
+        {
+        char buf[1024];
+
+        snprintf(buf, sizeof(buf), "%s%d/", paths[j], i);
+        rc |= chk_file_sec(buf,  1, 0, S_IWGRP | S_IWOTH, 1, EMsg);
+        }
       }
     }
 
-  rc  = chk_file_sec(path_arrays,  1, 0, S_IWGRP | S_IWOTH, 1, EMsg);
-
-  // check divided arrays subdirectories if needed
-  if (use_jobs_subdirs == TRUE)
-    {
-    int i;
-
-    for (i = 0; i <= 9; i++)
-      {
-      char buf[1024];
-
-      snprintf(buf, sizeof(buf), "%s%d/", path_arrays, i);
-      rc  |= chk_file_sec(buf,  1, 0, S_IWGRP | S_IWOTH, 1, EMsg);
-      }
-    }
   rc |= chk_file_sec(path_queues, 1, 0, S_IWGRP | S_IWOTH, 0, EMsg);
   rc |= chk_file_sec(path_spool, 1, 1, S_IWOTH,        0, EMsg);
   rc |= chk_file_sec(path_acct,  1, 0, S_IWGRP | S_IWOTH, 0, EMsg);
   rc |= chk_file_sec(path_credentials,  1, 0, S_IWGRP | S_IWOTH, 0, EMsg);
-  rc |= chk_file_sec((char *)PBS_ENVIRON, 0, 0, S_IWGRP | S_IWOTH, 1, EMsg);
+
+  if (use_path_home == true)
+    rc |= chk_file_sec(path_pbs_environment, 0, 0, S_IWGRP | S_IWOTH, 1, EMsg);
+  else
+    rc |= chk_file_sec((char *)PBS_ENVIRON, 0, 0, S_IWGRP | S_IWOTH, 1, EMsg);
 
   if (rc != PBSE_NONE)
     {
@@ -886,8 +945,6 @@ int initialize_paths()
 int initialize_data_structures_and_mutexes()
 
   {
-  long cray_enabled = FALSE;
-
   svr_do_schedule_mutex = (pthread_mutex_t *)calloc(1, sizeof(pthread_mutex_t));
   pthread_mutex_init(svr_do_schedule_mutex, NULL);
 
@@ -925,10 +982,7 @@ int initialize_data_structures_and_mutexes()
 
   initialize_task_recycler();
 
-  CLEAR_HEAD(svr_newnodes);
-
-  get_svr_attr_l(SRV_ATR_CrayEnabled, &cray_enabled);
-  if (cray_enabled == TRUE)
+  if (cray_enabled == true)
     {
     initialize_login_holder();
     }
@@ -953,9 +1007,6 @@ int setup_server_attrs(
   for (i = 0; i < SRV_ATR_LAST; i++)
     clear_attr(&server.sv_attr[i], &svr_attr_def[i]);
 
-  server.sv_attr[SRV_ATR_scheduler_iteration].at_val.at_long =  PBS_SCHEDULE_CYCLE;
-  server.sv_attr[SRV_ATR_scheduler_iteration].at_flags = ATR_VFLAG_SET;
-
   server.sv_attr[SRV_ATR_State].at_val.at_long = SV_STATE_INIT;
   server.sv_attr[SRV_ATR_State].at_flags = ATR_VFLAG_SET;
 
@@ -966,6 +1017,9 @@ int setup_server_attrs(
     (char *)PBS_DEFAULT_MAIL,
     0);
 
+  server.sv_attr[SRV_ATR_KeepCompleted].at_val.at_long = KEEP_COMPLETED_DEFAULT;
+  server.sv_attr[SRV_ATR_KeepCompleted].at_flags = ATR_VFLAG_SET;
+
   server.sv_attr[SRV_ATR_tcp_timeout].at_val.at_long = PBS_TCPTIMEOUT;
   server.sv_attr[SRV_ATR_tcp_timeout].at_flags = ATR_VFLAG_SET;
 
@@ -975,13 +1029,13 @@ int setup_server_attrs(
   server.sv_attr[SRV_ATR_JobStatRate].at_val.at_long = PBS_RESTAT_JOB;
   server.sv_attr[SRV_ATR_JobStatRate].at_flags = ATR_VFLAG_SET;
 
-  server.sv_attr[SRV_ATR_PollJobs].at_val.at_long = PBS_POLLJOBS;
+  server.sv_attr[SRV_ATR_PollJobs].at_val.at_bool = true;
   server.sv_attr[SRV_ATR_PollJobs].at_flags = ATR_VFLAG_SET;
 
   server.sv_attr[SRV_ATR_MomJobSync].at_flags = ATR_VFLAG_SET;
-  server.sv_attr[SRV_ATR_MomJobSync].at_val.at_long = 1;
+  server.sv_attr[SRV_ATR_MomJobSync].at_val.at_bool = true;
 
-  server.sv_attr[SRV_ATR_MoabArrayCompatible].at_val.at_long = TRUE;
+  server.sv_attr[SRV_ATR_MoabArrayCompatible].at_val.at_bool = true;
   server.sv_attr[SRV_ATR_MoabArrayCompatible].at_flags = ATR_VFLAG_SET;
 
   /* force logging of all types */
@@ -997,6 +1051,12 @@ int setup_server_attrs(
 
   server.sv_attr[SRV_ATR_TimeoutForJobRequeue].at_val.at_long = TIMEOUT_FOR_JOB_DEL_REQ;
   server.sv_attr[SRV_ATR_TimeoutForJobRequeue].at_flags = ATR_VFLAG_SET;
+
+  server.sv_attr[SRV_ATR_NoteAppendOnError].at_val.at_bool = true;
+  server.sv_attr[SRV_ATR_NoteAppendOnError].at_flags = ATR_VFLAG_SET;
+
+  server.sv_attr[SRV_ATR_DownOnError].at_val.at_bool = true;
+  server.sv_attr[SRV_ATR_DownOnError].at_flags = ATR_VFLAG_SET;
 
   /* If not a "create" initialization, recover server db */
   rc = chk_save_file(path_svrdb);
@@ -1019,10 +1079,16 @@ int setup_server_attrs(
       }
    
     if ((server.sv_attr[SRV_ATR_CopyOnRerun].at_flags & ATR_VFLAG_SET) &&
-        (server.sv_attr[SRV_ATR_CopyOnRerun].at_val.at_long))
+        (server.sv_attr[SRV_ATR_CopyOnRerun].at_val.at_bool))
       {
       cpy_stdout_err_on_rerun = true;
       }
+
+    if (server.sv_attr[SRV_ATR_acl_users_hosts].at_flags & ATR_VFLAG_SET)
+      update_user_acls(server.sv_attr + SRV_ATR_acl_users_hosts, SET);
+
+    if (server.sv_attr[SRV_ATR_acl_groups_hosts].at_flags & ATR_VFLAG_SET)
+      update_group_acls(server.sv_attr + SRV_ATR_acl_groups_hosts, SET);
     }
   else
     {
@@ -1049,7 +1115,7 @@ int setup_server_attrs(
     return(-1);
     }
 
-  if (server.sv_attr[SRV_ATR_RecordJobInfo].at_val.at_long)
+  if (server.sv_attr[SRV_ATR_RecordJobInfo].at_val.at_bool)
     {
     rc = job_log_open(job_log_file, path_jobinfo_log);
 
@@ -1065,7 +1131,7 @@ int setup_server_attrs(
   if (a_opt_init != -1)
     {
     /* a_option was set, overrides saved value of scheduling attr */
-    server.sv_attr[SRV_ATR_scheduling].at_val.at_long = a_opt_init;
+    server.sv_attr[SRV_ATR_scheduling].at_val.at_bool = a_opt_init;
     server.sv_attr[SRV_ATR_scheduling].at_flags |= ATR_VFLAG_SET;
     }
       
@@ -1073,6 +1139,211 @@ int setup_server_attrs(
 
   return(rc);
   } /* END setup_server_attrs() */
+
+
+
+#ifdef PENABLE_LINUX_CGROUPS
+
+/*
+ * remove_invalid_allocations()
+ *
+ * Checks the 
+ */
+void remove_invalid_allocations(
+
+  pbsnode *pnode)
+
+  {
+  if (pnode->nd_layout.is_initialized())
+    {
+    std::vector<std::string> job_ids;
+    std::vector<std::string> bad_allocation;
+    std::set<int>            internal_job_ids;
+    std::string node_id(pnode->get_name());
+
+    pnode->nd_layout.populate_job_ids(job_ids);
+
+    pnode->unlock_node(__func__, NULL, LOGLEVEL);
+
+    for (unsigned int i = 0; i < job_ids.size(); i++)
+      {
+      job *pjob = svr_find_job(job_ids[i].c_str(), TRUE);
+
+      if (pjob == NULL)
+        bad_allocation.push_back(job_ids[i]);
+      else
+        {
+        if (pjob->ji_qs.ji_state != JOB_STATE_RUNNING)
+          bad_allocation.push_back(job_ids[i]);
+
+        unlock_ji_mutex(pjob, __func__, "", 10);
+        }
+      }
+
+    pnode = find_nodebyname(node_id.c_str());
+
+    if (pnode == NULL)
+      throw (int)PBSE_NODE_DELETED;
+
+    for (size_t i = 0; i < bad_allocation.size(); i++)
+      pnode->nd_layout.free_job_allocation(bad_allocation[i].c_str());
+
+    if (bad_allocation.size() > 0)
+      save_node_usage(pnode);
+    }
+  } // END remove_invalid_allocations()
+
+
+
+/*
+ * load_node_usage()
+ *
+ * Loads pnode's usage information from file
+ *
+ * @param pnode - the node whose usage information we're loading
+ * @param node_name - the name of pnode
+ */
+
+void load_node_usage(
+
+  pbsnode    *pnode,
+  const char *node_name)
+
+  {
+  std::string layout;
+  int         fds = open(node_name, O_RDONLY, 0);
+  char        log_buf[LOCAL_LOG_BUF_SIZE];
+  char        buf[LOCAL_LOG_BUF_SIZE];
+  char       *read_ptr = buf;
+
+  if (fds < 0)
+    {
+    snprintf(log_buf, sizeof(log_buf),
+      "Can't open %s to recover node usage",
+      node_name);
+    log_err(errno, __func__, log_buf);
+    return;
+    }
+
+  memset(buf, 0, sizeof(buf));
+
+  while (read_ac_socket(fds, read_ptr, sizeof(buf)) > 0)
+    {
+    layout += buf;
+    memset(buf, 0, sizeof(buf));
+    }
+
+  if (layout.size() > 0)
+    {
+    std::vector<std::string> valid_ids;
+
+    for (size_t i = 0; i < pnode->nd_job_usages.size(); i++)
+      {
+      const char *id = job_mapper.get_name(pnode->nd_job_usages[i].internal_job_id);
+
+      if (id != NULL)
+        valid_ids.push_back(id);
+      }
+
+    pnode->nd_layout.reinitialize_from_json(layout, valid_ids);
+    }
+  else
+    {
+    snprintf(log_buf, sizeof(log_buf),
+      "Can't read data from %s to recover node usage",
+      node_name);
+    log_err(errno, __func__, log_buf);
+    }
+
+  close(fds);
+
+  remove_invalid_allocations(pnode);
+  } // END load_node_usage()
+
+
+
+/*
+ * load_node_usages()
+ *
+ * Loads the current usage information for any and all nodes
+ * @return PBSE_NONE on success, or -1 if the directory doesn't exist or cannot be opened
+ */
+
+int load_node_usages()
+  {
+  DIR              *dir;
+  struct dirent    *pdirent;
+  pbsnode          *pnode;
+  char              log_buf[LOCAL_LOG_BUF_SIZE];
+
+  if (chdir(path_node_usage) != 0)
+    {
+    if (errno == ENOENT)
+      {
+      int old_errno = errno;
+
+      errno = 0;
+
+      if (mkdir(path_node_usage, 0750) != 0)
+        {
+        errno = old_errno;
+        }
+      }
+
+    if (errno != 0)
+      {
+      sprintf(log_buf, msg_init_chdir, path_node_usage);
+
+      log_err(errno, __func__, log_buf);
+
+      return(-1);
+      }
+    }
+  
+  dir = opendir(".");
+
+  if (dir == NULL)
+    {
+    snprintf(log_buf, sizeof(log_buf),
+      "Couldn't open %s for recover node usage states.",
+      path_node_usage);
+    log_err(errno, __func__, log_buf);
+
+    sprintf(log_buf, "%s:1", __func__);
+    unlock_sv_qs_mutex(server.sv_qs_mutex, log_buf);
+
+    return(-1);
+    }
+
+  while ((pdirent = readdir(dir)) != NULL)
+    {
+    if ((pdirent->d_name[0] == '\0') ||
+        (!strcmp(pdirent->d_name, "..")) ||
+        (!strcmp(pdirent->d_name, ".")))
+      {
+      /* invalid name returned */
+      continue;
+      }
+
+    try
+      {
+      if ((pnode = find_nodebyname(pdirent->d_name)) != NULL)
+        {
+        mutex_mgr nd_mutex(&pnode->nd_mutex, true);
+        load_node_usage(pnode, pdirent->d_name);
+        }
+      }
+    catch (int caught_err)
+      {
+      log_err(caught_err, __func__, "");
+      }
+    }
+
+  closedir(dir);
+
+  return(PBSE_NONE);
+  } // END load_node_usages()
+#endif
 
 
 
@@ -1089,9 +1360,6 @@ int initialize_nodes()
 
   return(PBSE_NONE);
   } /* END initialize_nodes() */
-
-
-
 
 int handle_queue_recovery(
     
@@ -1176,9 +1444,6 @@ int handle_queue_recovery(
   return(rc);
   } /* END handle_queue_recovery() */
 
-
-
-
 void mark_as_badjob(
 
   const char *filename)
@@ -1211,7 +1476,7 @@ int handle_array_recovery(
   DIR              *dir_sub;
   int               rc = PBSE_NONE;
   int               rc2 = PBSE_NONE;
-  long              use_jobs_subdirs = FALSE;
+  bool              use_jobs_subdirs = false;
 
   if (chdir(path_arrays) != 0)
     {
@@ -1229,7 +1494,7 @@ int handle_array_recovery(
     return -1;
 
   // get the value of use_jobs_subdirs if set
-  get_svr_attr_l(SRV_ATR_use_jobs_subdirs, &use_jobs_subdirs);
+  get_svr_attr_b(SRV_ATR_use_jobs_subdirs, &use_jobs_subdirs);
 
   while ((pdirent = readdir(dir)) != NULL)
     {
@@ -1400,7 +1665,7 @@ int handle_job_recovery(
   job              *pjob;
   time_t            time_now = time(NULL);
   char              basen[MAXPATHLEN+1];
-  long              use_jobs_subdirs = FALSE;
+  bool              use_jobs_subdirs = false;
 
   JobArray.clear();
   recovered_job_count = 0;
@@ -1444,7 +1709,7 @@ int handle_job_recovery(
   else
     {
     // get the value of use_jobs_subdirs if set
-    get_svr_attr_l(SRV_ATR_use_jobs_subdirs, &use_jobs_subdirs);
+    get_svr_attr_b(SRV_ATR_use_jobs_subdirs, &use_jobs_subdirs);
 
     while ((pdirent = readdir(dir)) != NULL)
       {
@@ -1670,7 +1935,7 @@ int process_jobs_dirent(
       {
       if ((pjob = job_recov(dirent_name)) != NULL)
         {
-        pjob->ji_is_array_template = TRUE;
+        pjob->ji_is_array_template = true;
 
 
         JobArray[pjob->ji_qs.ji_jobid] = pjob;
@@ -1714,7 +1979,6 @@ int process_jobs_dirent(
   } /* END process_jobs_dirent() */
 
 
-
 int cleanup_recovered_arrays()
 
   {
@@ -1740,7 +2004,9 @@ int cleanup_recovered_arrays()
       if ((pjob = svr_find_job(pa->ai_qs.parent_id, FALSE)) != NULL)
         svr_job_purge(pjob);
 
-      array_delete(pa);
+      std::string array_id(pa->ai_qs.parent_id);
+      unlock_ai_mutex(pa, __func__, "1", LOGLEVEL);
+      array_delete(array_id.c_str());
 
       /* move on to the next array */
       continue;
@@ -1757,7 +2023,8 @@ int cleanup_recovered_arrays()
       array_save(pa);
       }
 
-    if (pa->ai_qs.num_cloned != pa->ai_qs.num_jobs)
+    if ((pa->ai_qs.num_cloned < pa->ai_qs.idle_slot_limit) &&
+        (pa->ai_qs.num_cloned != pa->ai_qs.num_jobs))
       {
       /* if we can't finish building the job array then delete whats been done
          so far */
@@ -1780,7 +2047,9 @@ int cleanup_recovered_arrays()
             }
           }
 
-        array_delete(pa);
+        std::string array_id(pa->ai_qs.parent_id);
+        unlock_ai_mutex(pa, __func__, "1", LOGLEVEL);
+        array_delete(array_id.c_str());
         continue;
         }
       else
@@ -1795,7 +2064,9 @@ int cleanup_recovered_arrays()
     else if ((pa->ai_qs.jobs_done == pa->ai_qs.num_jobs) && 
              (job_template_exists == FALSE))
       {
-      array_delete(pa);
+      std::string array_id(pa->ai_qs.parent_id);
+      unlock_ai_mutex(pa, __func__, "1", LOGLEVEL);
+      array_delete(array_id.c_str());
       continue;
       }
 
@@ -1810,6 +2081,11 @@ int cleanup_recovered_arrays()
 
 
 
+/*
+ * handle_job_and_array_recovery()
+ *
+ * Recovers the job arrays and jobs, and then cleans up the job arrays
+ */
 
 int handle_job_and_array_recovery(
 
@@ -1817,13 +2093,20 @@ int handle_job_and_array_recovery(
 
   {
   int rc;
+  int tmp_rc;
 
-  if ((rc = handle_array_recovery(type)) != PBSE_NONE)
-    return(rc);
-  else if ((rc = handle_job_recovery(type)) != PBSE_NONE)
-    return(rc);
-  else
-    rc = cleanup_recovered_arrays();
+  rc = handle_array_recovery(type);
+  
+  if ((tmp_rc = handle_job_recovery(type)) != PBSE_NONE)
+    {
+    if (rc == PBSE_NONE)
+      rc = tmp_rc;
+    }
+
+  tmp_rc = cleanup_recovered_arrays();
+    
+  if (rc == PBSE_NONE)
+    rc = tmp_rc;
 
   return(rc);
   } /* END handle_job_and_array_recovery() */
@@ -1929,6 +2212,26 @@ void setup_threadpool()
 
 
 
+/*
+ * Sets some server policies which won't change during execution
+ *
+ */
+
+void set_server_policies()
+
+  {
+  bool cray = false;
+  bool recover_subjobs = false;
+
+  if (get_svr_attr_b(SRV_ATR_CrayEnabled, &cray) == PBSE_NONE)
+    cray_enabled = cray;
+
+  if (get_svr_attr_b(SRV_ATR_GhostArrayRecovery, &recover_subjobs) == PBSE_NONE)
+    ghost_array_recovery = recover_subjobs;
+
+  } // END set_server_policies()
+
+
 
 /*
  * This file contains the functions to initialize the PBS Batch Server.
@@ -1950,7 +2253,15 @@ int pbsd_init(
     hints.ai_flags = AI_CANONNAME;
 
     /* The following is code to reduce security risks */
-    if (setup_env(PBS_ENVIRON) == -1)
+    if (use_path_home == true)
+      {
+      path_pbs_environment = build_path(path_home, "pbs_environment", "");
+      if (setup_env(path_pbs_environment) == -1)
+        {
+        return(-1);
+        }
+      }
+    else if (setup_env(PBS_ENVIRON) == -1)
       {
       return(-1);
       }
@@ -1983,6 +2294,8 @@ int pbsd_init(
     if ((ret = initialize_paths()) != PBSE_NONE)
       return(ret);
 
+    set_server_policies();
+
     initialize_data_structures_and_mutexes();
 
     /* 3. Set default server attibutes values */
@@ -2001,6 +2314,13 @@ int pbsd_init(
       return(ret);
 
     handle_job_and_array_recovery(type);
+
+#ifdef PENABLE_LINUX_CGROUPS
+    if ((ret = load_node_usages()) != PBSE_NONE)
+      {
+      return(ret);
+      }
+#endif
 
     /* Put us back in the Server's Private directory */
     if (chdir(path_priv) != 0)
@@ -2120,9 +2440,7 @@ int pbsd_init_job(
   char              log_buf[LOCAL_LOG_BUF_SIZE];
   int               local_errno = 0;
   char              job_id[PBS_MAXSVRJOBID+1];
-  long              job_atr_hold;
   int               job_exit_status;
-  long              cray_enabled = FALSE;
 
   pjob->ji_momhandle = -1;
 
@@ -2344,20 +2662,18 @@ int pbsd_init_job(
 
       /* do array bookeeping */
       if ((pjob->ji_arraystructid[0] != '\0') &&
-          (pjob->ji_is_array_template == FALSE))
+          (pjob->ji_is_array_template == false))
         {
         job_array *pa = get_jobs_array(&pjob);
 
         if (pjob != NULL)
           {
           strcpy(job_id, pjob->ji_qs.ji_jobid);
-          job_atr_hold = pjob->ji_wattr[JOB_ATR_hold].at_val.at_long;
           job_exit_status = pjob->ji_qs.ji_un.ji_exect.ji_exitstat;
           unlock_ji_mutex(pjob, __func__, "1", LOGLEVEL);
           if (pa)
             {
-            update_array_values(pa,JOB_STATE_RUNNING,aeTerminate,
-                job_id, job_atr_hold, job_exit_status);
+            pa->update_array_values(JOB_STATE_RUNNING, aeTerminate, job_id, job_exit_status);
           
             unlock_ai_mutex(pa, __func__, "1", LOGLEVEL);
             }
@@ -2415,9 +2731,8 @@ int pbsd_init_job(
       if (pjob->ji_wattr[JOB_ATR_exec_host].at_flags & ATR_VFLAG_SET)
         {
         char *tmp;
-        get_svr_attr_l(SRV_ATR_CrayEnabled, &cray_enabled);
 
-        if ((cray_enabled == TRUE) &&
+        if ((cray_enabled == true) &&
             (pjob->ji_wattr[JOB_ATR_login_node_id].at_val.at_str != NULL))
           {
           tmp = parse_servername(pjob->ji_wattr[JOB_ATR_login_node_id].at_val.at_str, &d);
@@ -2440,6 +2755,49 @@ int pbsd_init_job(
 
 
 
+/*
+ * check_jobs_queue()
+ *
+ * This ensures that a queue is created for pjob. If the queue isn't present,
+ * a ghost queue is created so that the job isn't deleted. This queue won't be
+ * able to enqueue new jobs, only jobs that are being recovered.
+ */
+
+void check_jobs_queue(
+
+  job *pjob)
+
+  {
+  std::string queue_name(pjob->ji_qs.ji_queue);
+  std::string job_id(pjob->ji_qs.ji_jobid);
+
+  unlock_ji_mutex(pjob, __func__, "1", LOGLEVEL);
+
+  pbs_queue *pque = find_queuebyname(queue_name.c_str());
+
+  if (pque == NULL)
+    {
+    // Create the queue but flag it as a ghost queue
+    pque = que_alloc(queue_name.c_str(), TRUE);
+    pque->qu_attr[QA_ATR_QType].at_val.at_str = strdup("Execution");
+    pque->qu_attr[QA_ATR_QType].at_flags |= ATR_VFLAG_SET;
+    pque->qu_qs.qu_type = QTYPE_Execution;
+
+    pque->qu_attr[QA_ATR_Started].at_val.at_long = 1;
+    pque->qu_attr[QA_ATR_Started].at_flags |= ATR_VFLAG_SET;
+
+    pque->qu_attr[QA_ATR_Enabled].at_val.at_long = 1;
+    pque->qu_attr[QA_ATR_Enabled].at_flags |= ATR_VFLAG_SET;
+
+    pque->qu_attr[QA_ATR_GhostQueue].at_val.at_long = 1;
+    pque->qu_attr[QA_ATR_GhostQueue].at_flags |= ATR_VFLAG_SET;
+    }
+
+  unlock_queue(pque, __func__, NULL, LOGLEVEL);
+
+  pjob = svr_find_job(job_id.c_str(), TRUE);
+  } // END check_jobs_queue()
+
 
 
 int pbsd_init_reque(
@@ -2457,7 +2815,15 @@ int pbsd_init_reque(
 
   sprintf(log_buf, "%s:1", __func__);
   lock_sv_qs_mutex(server.sv_qs_mutex, log_buf);
-  if ((rc = svr_enquejob(pjob, TRUE, NULL, false)) == PBSE_NONE)
+
+  check_jobs_queue(pjob);
+
+  rc = svr_enquejob(pjob, TRUE, NULL, false, true);
+
+  // Since we aren't aborting jobs that receive PBSD_BADDEPEND, 
+  // we need to set them up properly, inside this if statement.
+  if ((rc == PBSE_NONE) ||
+      (rc == PBSE_BADDEPEND))
     {
     int len;
     snprintf(log_buf, sizeof(log_buf), msg_init_substate,
@@ -2485,12 +2851,13 @@ int pbsd_init_reque(
       {
       set_statechar(pjob);
       }
+
+    rc = PBSE_NONE;
     }
   else
     {
     /* Oops, this should never happen */
-    if ((rc != PBSE_JOB_RECYCLED) &&
-        (rc != PBSE_BADDEPEND))
+    if (rc != PBSE_JOB_RECYCLED)
       {
       snprintf(log_buf, sizeof(log_buf), "%s; job %s queue %s",
         msg_err_noqueue,
@@ -2502,8 +2869,7 @@ int pbsd_init_reque(
 
     unlock_sv_qs_mutex(server.sv_qs_mutex, log_buf);
 
-    if ((rc != PBSE_JOB_RECYCLED) &&
-        (rc != PBSE_BADDEPEND))
+    if (rc != PBSE_JOB_RECYCLED)
       job_abt(&pjob, log_buf);
 
     lock_sv_qs_mutex(server.sv_qs_mutex, log_buf);
@@ -2552,7 +2918,7 @@ void catch_abort(
   sigaction(SIGTRAP, &act, NULL);
   sigaction(SIGSYS, &act, NULL);
 
-  log_err(sig, "mom_main", (char *)"Caught fatal core signal");
+  log_err(sig, __func__, "Caught fatal core signal");
 
   rlimit.rlim_cur = RLIM_INFINITY;
   rlimit.rlim_max = RLIM_INFINITY;
@@ -2581,7 +2947,7 @@ void change_logs_handler(int sig)
 void change_logs()
 
   {
-  long record_job_info = FALSE;
+  bool record_job_info = false;
 
   run_change_logs = FALSE;
   acct_close(false);
@@ -2592,7 +2958,7 @@ void change_logs()
 
   acct_open(acct_file, false);
 
-  get_svr_attr_l(SRV_ATR_RecordJobInfo, &record_job_info);
+  get_svr_attr_b(SRV_ATR_RecordJobInfo, &record_job_info);
   if (record_job_info)
     {
     pthread_mutex_lock(&job_log_mutex);

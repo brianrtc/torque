@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <pthread.h>
+#include <pbs_config.h>
 
 #include "utils.h"
 #include "batch_request.h"
@@ -9,6 +10,7 @@
 #include "u_tree.h"
 #include "threadpool.h"
 #include "resource.h"
+#include "track_alps_reservations.hpp"
 
 #define ATR_DFLAG_SSET  (ATR_DFLAG_SvWR | ATR_DFLAG_SvRD)
 #define rot(x,k) (((x)<<(k)) | ((x)>>(32-(k))))
@@ -34,10 +36,14 @@
   c ^= b; c -= rot(b,24); \
   }
 
+int removed_reservation = 0;
+int issued_request = 0;
+int state_updated = 0;
+
 threadpool_t *task_pool;
 bool exit_called = false;
 char log_buffer[LOG_BUF_SIZE];
-int count;
+int mgr_count;
 int LOGLEVEL = 7; /* force logging code to be exercised as tests run */
 all_nodes allnodes;
 struct node_state
@@ -64,7 +70,7 @@ int unlock_node(struct pbsnode *pnode, const char *method, const char *msg, int 
 
 
 /* nothing needed for this function */
-int save_node_status(struct pbsnode *np, pbs_attribute  *temp)
+int save_node_status(struct pbsnode *np, std::string &new_status)
 
   {
   return(0);
@@ -77,6 +83,8 @@ void update_node_state(
   int             newstate)   /* I (one of INUSE_*) */
 
   {
+  state_updated++;
+
   if (newstate & INUSE_DOWN)
     {
     if (!(np->nd_state & INUSE_DOWN))
@@ -132,8 +140,7 @@ struct pbsnode *find_nodebyname(
 
   if (initialized == 0)
     {
-    memset(&pnode, 0, sizeof(struct pbsnode));
-    pnode.nd_name = strdup("george");
+    pnode.change_name("george");
     pnode.alps_subnodes = new all_nodes();
     }
 
@@ -143,38 +150,13 @@ struct pbsnode *find_nodebyname(
   }  /* END find_nodebyname() */
 
 
-void free_prop_list(
-        
-  struct prop *prop)
-  
-  {  
-  struct prop *pp;
-  
-  while (prop)
-    {
-    pp = prop->next;
-    free(prop);
-    prop = pp;
-    }
-  } /* END free_prop_list() */
-
-
 
 struct prop *init_prop(
 
   char *pname) /* I */
 
   {
-  struct prop *pp;
-  
-  if ((pp = (struct prop *)calloc(1, sizeof(struct prop))) != NULL)
-    {
-    pp->name    = pname;
-    pp->mark    = 0;
-    pp->next    = 0;
-    }
-  
-  return(pp);
+  return(new prop(pname));
   }  /* END init_prop() */
 
 
@@ -312,13 +294,14 @@ int mgr_set_node_attr(
   int            *bad,    /* if there is a "bad pbs_attribute" pass back 
                                position via this loc */
   void           *parent, /*may go unused in this function */
-  int             mode)  /*passed to attrib's action func not used by 
+  int             mode,  /*passed to attrib's action func not used by 
                              this func at this time*/
+  bool            dont_update)
 
   {
-  count++;
+  mgr_count++;
 
-  if (count < 2)
+  if (mgr_count < 2)
     return(0);
   else
     return(1);
@@ -347,7 +330,8 @@ int attr_atomic_node_set(
   int              limit,    /* number elts in definition array */
   int              unkn,     /* <0 unknown attrib not permitted */
   int              privil,   /* requester's access privileges   */
-  int             *badattr)  /* return list position wher bad   */
+  int             *badattr,  /* return list position wher bad   */
+  bool             update_nodes_file)
 
   {
   int           acc;
@@ -982,89 +966,6 @@ void *get_next(
 
 
 
-
-int node_status_list(
-
-  pbs_attribute *new_attr,           /*derive status into this pbs_attribute*/
-  void          *pnode,         /*pointer to a pbsnode struct     */
-  int            actmode)       /*action mode; "NEW" or "ALTER"   */
-
-  {
-  int              rc = 0;
-
-  struct pbsnode  *np;
-  pbs_attribute    temp;
-
-  np = (struct pbsnode *)pnode;    /* because of at_action arg type */
-
-  switch (actmode)
-    {
-
-    case ATR_ACTION_NEW:
-
-      /* if node has a status list, then copy array_strings    */
-      /* into temp to use to setup a copy, otherwise setup empty */
-
-      if (np->nd_status != NULL)
-        {
-        /* setup temporary pbs_attribute with the array_strings */
-        /* from the node                                    */
-
-        temp.at_val.at_arst = np->nd_status;
-        temp.at_flags = ATR_VFLAG_SET;
-        temp.at_type  = ATR_TYPE_ARST;
-
-        rc = set_arst(new_attr, &temp, SET);
-        }
-      else
-        {
-        /* node has no properties, setup empty pbs_attribute */
-
-        new_attr->at_val.at_arst = NULL;
-        new_attr->at_flags       = 0;
-        new_attr->at_type        = ATR_TYPE_ARST;
-        }
-
-      break;
-
-    case ATR_ACTION_ALTER:
-
-      if (np->nd_status != NULL)
-        {
-        free(np->nd_status->as_buf);
-        free(np->nd_status);
-
-        np->nd_status = NULL;
-        }
-
-      /* update node with new attr_strings */
-
-      np->nd_status = new_attr->at_val.at_arst;
-
-      new_attr->at_val.at_arst = NULL;
-      /* update number of status items listed in node */
-      /* does not include name and subnode property */
-
-      if (np->nd_status != NULL)
-        np->nd_nstatus = np->nd_status->as_usedptr;
-      else
-        np->nd_nstatus = 0;
-
-      break;
-
-    default:
-
-      rc = PBSE_INTERNAL;
-
-      break;
-    }  /* END switch(actmode) */
-
-  return(rc);
-  }  /* END node_status_list() */
-
-
-
-
 attribute_def node_attr_def[] =
   {
 
@@ -1139,7 +1040,7 @@ attribute_def node_attr_def[] =
 	   set_arst,
 	   comp_null,
 	   free_arst,
-	   node_status_list,
+	   NULL_FUNC,
 	   MGR_ONLY_SET,
 	   ATR_TYPE_ARST,
 	   PARENT_TYPE_NODE,
@@ -1297,37 +1198,6 @@ int insert_node(
   {
   return(0);
   } /* END insert_node() */
-
-
-
-
-int initialize_pbsnode(
-
-  struct pbsnode *pnode,
-  char           *pname, /* node name */
-  u_long         *pul,  /* host byte order array */
-  /* ipaddrs for this node */
-  int             ntype, /* time-shared or cluster */
-  bool            isNUMANode) /* TRUE if this is a NUMA node. */
-
-  {
-  memset(pnode, 0, sizeof(struct pbsnode));
-
-  pnode->nd_mutex = (pthread_mutex_t *)calloc(1, sizeof(pthread_mutex_t));
-  if (pnode->nd_mutex == NULL)
-    {
-    log_err(ENOMEM, __func__, "Could not allocate memory for the node's mutex");
-
-    return(ENOMEM);
-    }
-
-  pthread_mutex_init(pnode->nd_mutex,NULL);
-
-  pnode->nd_name = pname;
-
-  return(PBSE_NONE);
-  }  /* END initialize_pbsnode() */
-
 
 
 
@@ -1563,14 +1433,26 @@ int encode_arst( pbs_attribute *attr, tlist_head *phead, const char *atname, con
 
 void free_null(struct pbs_attribute *attr) {}
 
-bool is_orphaned(
+bool reservation_holder::is_orphaned(
 
-  char *rsv_id,
-  char *job_id)
+  const char *rsv_id,
+  std::string &job_id)
 
   {
   return(true);
   }
+  
+bool reservation_holder::already_recorded(const char *rsv_id)
+  {
+  return(true);
+  }
+  
+int reservation_holder::remove_alps_reservation(const char *rsv_id)
+  {
+  return(0);
+  }
+  
+void reservation_holder::remove_from_orphaned_list(const char *rsv_id) {}
 
 job *svr_find_job(char *jobid, int get_subjob)
   {
@@ -1609,22 +1491,27 @@ int issue_Drequest(
   bool                   close_handle)
 
   {
+  issued_request++;
   return(0);
   }
 
 pbs_net_t get_hostaddr(
 
   int  *local_errno, /* O */    
-  char *hostname)    /* I */
+  const char *hostname)    /* I */
 
   {
   return(0);
   }
 
-int track_alps_reservation(job *pjob)
+int reservation_holder::track_alps_reservation(job *pjob)
   {
   return(0);
   }
+
+reservation_holder::reservation_holder() {}
+
+reservation_holder alps_reservations;
 
 int svr_connect(
 
@@ -1649,7 +1536,7 @@ void release_req(
 
 int already_recorded(
 
-  char *rsv_id)
+  const char *rsv_id)
 
   {
   static int i = 0;
@@ -1661,7 +1548,7 @@ int already_recorded(
 
 struct pbsnode *get_next_login_node(
 
-  struct prop *needed)
+  std::vector<prop> *needed)
 
   {
   static struct pbsnode login;
@@ -1697,7 +1584,7 @@ int copy_properties(struct pbsnode *dest, struct pbsnode *src)
   return(0);
   }
 
-struct pbsnode *find_node_in_allnodes(all_nodes *an, char *nodename)
+struct pbsnode *find_node_in_allnodes(all_nodes *an, const char *nodename)
   {
   return(NULL);
   }
@@ -1711,6 +1598,7 @@ void delete_a_subnode(
 
 int remove_alps_reservation(char *rsv_id)
   {
+  removed_reservation++;
   return(0);
   }
 
@@ -1797,4 +1685,232 @@ resource_def svr_resc_def_const[] =
 int svr_resc_size = sizeof(svr_resc_def_const)/sizeof(resource_def);
 
 resource_def *svr_resc_def = svr_resc_def_const;
+
+pbsnode::pbsnode() : nd_slots(), nd_state(0), nd_ngpus(0), max_subnode_nppn(0)
+#ifdef PENABLE_LINUX_CGROUPS
+                     , nd_layout()
+#endif
+  {
+  }
+
+pbsnode::~pbsnode() 
+  {
+  }
+
+pbsnode::pbsnode(
+    
+  const char *name,
+  u_long     *addrs,
+  bool        lookup) : nd_slots(), nd_state(0), nd_ngpus(0), max_subnode_nppn(0)
+
+#ifdef PENABLE_LINUX_CGROUPS
+                     , nd_layout()
+#endif
+
+  {
+  this->nd_name = name;
+  }
+
+int pbsnode::lock_node(const char *id, const char *msg, int level)
+
+  {
+  return(0);
+  }
+
+int encode_complete_req(
+    
+  pbs_attribute *attr,
+  tlist_head    *phead,
+  const char    *atname,
+  const char    *rsname,
+  int            mode,
+  int            perm)
+
+  {
+  return(0);
+  }
+
+int pbsnode::unlock_node(const char *id, const char *msg, int level)
+
+  {
+  return(0);
+  }
+
+int  decode_complete_req(
+    
+  pbs_attribute *patr,
+  const char    *name,
+  const char    *rescn,
+  const char    *val,
+  int            perm)
+
+  {
+  return(0);
+  }
+
+const char *pbsnode::get_name() const
+  {
+  return(this->nd_name.c_str());
+  }
+
+int pbsnode::get_error() const
+  {
+  return(0);
+  }
+
+void pbsnode::change_name(const char *name)
+  {
+  this->nd_name = name;
+  }
+
+int pbsnode::copy_properties(pbsnode *dest) const
+  {
+  return(0);
+  }
+
+int comp_complete_req(
+   
+  pbs_attribute *attr,
+  pbs_attribute *with)
+
+  {
+  return(0);
+  } // END comp_complete_req()
+
+void free_complete_req(
+
+  pbs_attribute *patr) {}
+
+int set_complete_req(
+    
+  pbs_attribute *attr,
+  pbs_attribute *new_attr,
+  enum batch_op  op)
+  
+  {
+  return(0);
+  }
+
+job::job() {}
+job::~job() {}
+
+#ifdef PENABLE_LINUX_CGROUPS
+int Machine::getTotalThreads() const
+  {
+  return(this->totalThreads);
+  }
+
+bool Machine::is_initialized() const
+  {
+  return(false);
+  }
+
+Machine::~Machine() {}
+
+Socket::Socket() : chips() {}
+Socket::~Socket() {}
+
+Socket &Socket::operator =(
+
+  const Socket &other)
+
+  {
+  this->chips = other.chips;
+  return(*this);
+  }
+
+PCI_Device::PCI_Device() : name(), info_name(), info_value() {}
+PCI_Device::~PCI_Device() {}
+PCI_Device::PCI_Device(
+    
+  const PCI_Device &other) : name(other.name), info_name(other.info_name),
+                             info_value(other.info_value)
+
+  {
+  }
+
+PCI_Device &PCI_Device::operator =(
+
+  const PCI_Device &other)
+
+  {
+  this->name = other.name;
+  this->info_name = other.info_name;
+  this->info_value = other.info_value;
+
+  return(*this);
+  }
+
+Chip::~Chip() {}
+Chip::Chip() : cores(), devices(), allocations() {}
+Chip::Chip(
+
+  const Chip &other) : cores(other.cores), devices(other.devices), allocations(other.allocations)
+
+  {
+  }
+
+Chip &Chip::operator =(
+
+  const Chip &other)
+
+  {
+  this->cores = other.cores;
+  this->devices = other.devices;
+  this->allocations = other.allocations;
+  return(*this);
+  }
+
+Core::Core() : indices(), is_index_busy() {}
+Core::~Core() {}
+
+allocation::allocation(
+
+  const allocation &other) : cpu_place_indices(other.cpu_place_indices), 
+                             cpu_indices(other.cpu_indices), mem_indices(other.mem_indices),
+                             gpu_indices(other.gpu_indices), mic_indices(other.mic_indices),
+                             jobid(other.jobid), hostname(other.hostname)
+
+  {
+  }
+
+allocation &allocation::operator =(
+
+  const allocation &other)
+
+  {
+  this->cpu_place_indices = other.cpu_place_indices;
+  this->cpu_indices = other.cpu_indices;
+  this->mem_indices = other.mem_indices;
+  this->gpu_indices = other.gpu_indices;
+  this->mic_indices = other.mic_indices;
+  this->jobid = other.jobid;
+  this->hostname = other.hostname;
+
+  return(*this);
+  }
+                             
+
+Machine::Machine(int np, int numa_nodes, int sockets) : sockets(), NVIDIA_device(), allocations()
+  {
+  }
+
+Machine::Machine() : sockets(), NVIDIA_device(), allocations()
+  {
+  }
+
+Machine &Machine::operator =(const Machine &other)
+  {
+  this->sockets = other.sockets;
+  this->NVIDIA_device = other.NVIDIA_device;
+  this->allocations = other.allocations;
+
+  return(*this);
+  }
+
+void Machine::setMemory(long long mem)
+  {
+  this->totalMemory = mem;
+  }
+#endif
 

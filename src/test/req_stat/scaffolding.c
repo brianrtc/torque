@@ -114,7 +114,7 @@ int unlock_node(struct pbsnode *the_node, const char *id, const char *msg, int l
   exit(1);
   }
 
-job_array *get_array(char *id)
+job_array *get_array(const char *id)
   {
   return(NULL);
   }
@@ -193,12 +193,6 @@ struct pbsnode *AVL_find(u_long key, uint16_t port, AvlTree tree)
 void netcounter_get(int netrates[])
   {
   fprintf(stderr, "The call to netcounter_get to be mocked!!\n");
-  exit(1);
-  }
-
-int hasprop(struct pbsnode *pnode, struct prop *props)
-  {
-  fprintf(stderr, "The call to hasprop to be mocked!!\n");
   exit(1);
   }
 
@@ -297,6 +291,11 @@ int get_svr_attr_l(int index, long *l)
   return(0);
   }
 
+int get_svr_attr_b(int index, bool *b)
+  {
+  return(0);
+  }
+
 pbs_queue *get_jobs_queue(job **pjob)
   {
   return((*pjob)->ji_qhdr);
@@ -344,3 +343,28 @@ void log_record(int eventtype, int objclass, const char *objname, const char *te
 void log_event(int eventtype, int objclass, const char *objname, const char *text) {}
 
 int svr_unresolvednodes = 0;
+
+const char *pbsnode::get_name() const
+  {
+  return(this->nd_name.c_str());
+  }
+
+int pbsnode::lock_node(const char *msg, const char *id, int level)
+  {
+  return(0);
+  }
+
+int pbsnode::unlock_node(const char *msg, const char *id, int level)
+  {
+  return(0);
+  }
+
+bool pbsnode::hasprop(std::vector<prop> *needed) const
+  {
+  return(true);
+  }
+
+  void set_reply_type(struct batch_reply *preply, int type)
+  {
+  preply->brp_choice = type;
+  }

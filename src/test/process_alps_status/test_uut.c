@@ -25,13 +25,14 @@ char buf[4096];
 const char *alps_status[] = {"node=1", "CPROC=12", "state=UP", "reservation_id=12", "<cray_gpu_status>", "gpu_id=0", "clock_mhz=2600", "gpu_id=1", "clock_mhz=2600", "</cray_gpu_status>", NULL};
 /*node=2\0CPROC=12\0state=UP\0<cray_gpu_status>\0gpu_id=0\0clock_mhz=2600\0gpu_id=1\0clock_mhz=2600\0</cray_gpu_status>\0node=3\0CPROC=12\0state=UP\0<cray_gpu_status>\0gpu_id=0\0clock_mhz=2600\0gpu_id=1\0clock_mhz=2600\0</cray_gpu_status>\0\0";*/
 
-extern int count;
+extern int mgr_count;
+extern int removed_reservation;
+extern int issued_request;
+extern int state_updated;
 
 START_TEST(record_reservation_test)
   {
   struct pbsnode pnode;
-
-  memset(&pnode, 0, sizeof(pnode));
 
   fail_unless(record_reservation(&pnode, "1") != PBSE_NONE);
 
@@ -44,21 +45,20 @@ END_TEST
 
 START_TEST(set_ncpus_test)
   {
-  struct pbsnode  pnode;
-  struct pbsnode  parent;
+  pbsnode *pnode = new pbsnode();
+  pbsnode *parent = new pbsnode();
 
-  memset(&parent,0,sizeof(pbsnode));
-  fail_unless(set_ncpus(&pnode,&parent, 2) == 0, "Couldn't set ncpus to 2");
-  snprintf(buf, sizeof(buf), "ncpus should be 2 but is %d", pnode.nd_slots.get_total_execution_slots());
-  fail_unless(pnode.nd_slots.get_total_execution_slots() == 2, buf);
+  fail_unless(set_ncpus(pnode,parent, 2) == 0, "Couldn't set ncpus to 2");
+  snprintf(buf, sizeof(buf), "ncpus should be 2 but is %d", pnode->nd_slots.get_total_execution_slots());
+  fail_unless(pnode->nd_slots.get_total_execution_slots() == 2, buf);
 
-  fail_unless(set_ncpus(&pnode,&parent, 4) == 0, "Couldn't set ncpus to 4");
-  snprintf(buf, sizeof(buf), "ncpus should be 4 but is %d", pnode.nd_slots.get_total_execution_slots());
-  fail_unless(pnode.nd_slots.get_total_execution_slots() == 4, buf);
+  fail_unless(set_ncpus(pnode,parent, 4) == 0, "Couldn't set ncpus to 4");
+  snprintf(buf, sizeof(buf), "ncpus should be 4 but is %d", pnode->nd_slots.get_total_execution_slots());
+  fail_unless(pnode->nd_slots.get_total_execution_slots() == 4, buf);
 
-  fail_unless(set_ncpus(&pnode,&parent, 8) == 0, "Couldn't set ncpus to 8");
-  snprintf(buf, sizeof(buf), "ncpus should be 8 but is %d", pnode.nd_slots.get_total_execution_slots());
-  fail_unless(pnode.nd_slots.get_total_execution_slots() == 8, buf);
+  fail_unless(set_ncpus(pnode,parent, 8) == 0, "Couldn't set ncpus to 8");
+  snprintf(buf, sizeof(buf), "ncpus should be 8 but is %d", pnode->nd_slots.get_total_execution_slots());
+  fail_unless(pnode->nd_slots.get_total_execution_slots() == 8, buf);
   }
 END_TEST
 
@@ -68,8 +68,6 @@ END_TEST
 START_TEST(set_ngpus_test)
   {
   struct pbsnode pnode;
-
-  memset(&pnode, 0, sizeof(pnode));
 
   fail_unless(set_ngpus(&pnode, 2) == 0, "Couldn't set ngpus to 2");
   snprintf(buf, sizeof(buf), "ngpus should be 2 but id %d", pnode.nd_ngpus);
@@ -97,7 +95,7 @@ START_TEST(set_state_test)
   const char    *up_str   = "state=UP";
   const char    *down_str = "state=DOWN";
 
-  memset(&pnode, 0, sizeof(pnode));
+  pnode.nd_state = 0;
 
   set_state(&pnode, up_str);
   snprintf(buf, sizeof(buf), "Couldn't set state to up, state is %d", pnode.nd_state);
@@ -165,16 +163,15 @@ START_TEST(determine_node_from_str_test)
   const char     *node_str2 = "node=george";
   struct pbsnode *new_node;
 
-  memset(&parent, 0, sizeof(parent));
-  parent.nd_name = strdup("george");
+  parent.change_name("george");
   parent.alps_subnodes = new all_nodes();
 
-  count = 0; // set so that create_alps_subnode doesn't fail
+  mgr_count = 0; // set so that create_alps_subnode doesn't fail
   new_node = determine_node_from_str(node_str1, &parent, &parent);
   fail_unless(new_node != NULL, "new node is NULL?");
   fail_unless(new_node->nd_lastupdate != 0, "update time not set");
 
-  count = 0; // set so that create_alps_subnode doesn't fail
+  mgr_count = 0; // set so that create_alps_subnode doesn't fail
   new_node = determine_node_from_str(node_str2, &parent, &parent);
   fail_unless(new_node == &parent, "advanced current when current should've remained the same");
 
@@ -186,9 +183,14 @@ END_TEST
 
 START_TEST(check_orphaned_test)
   {
-  const char *rsv_id = "tom";
+  const char *rsv_id = "napali:tom";
+  removed_reservation = 0;
+  issued_request = 0;
+  state_updated = 0;
 
-  fail_unless(check_if_orphaned((void *)rsv_id) == 0, "bad return code");
+  fail_unless(check_if_orphaned(strdup(rsv_id)) == 0, "bad return code");
+  fail_unless(issued_request == 1);
+  fail_unless(state_updated == 1);
   }
 END_TEST
 
@@ -202,8 +204,6 @@ START_TEST(create_alps_subnode_test)
   struct pbsnode *subnode;
   extern int      svr_clnodes;
   int             start_clnodes_value = svr_clnodes;;
-
-  memset(&parent, 0, sizeof(struct pbsnode));
 
   subnode = create_alps_subnode(&parent, node_id);
   fail_unless(subnode != NULL, "subnode was returned NULL?");
@@ -239,7 +239,7 @@ START_TEST(process_reservation_id_test)
   {
   struct pbsnode pnode;
 
-  memset(&pnode, 0, sizeof(struct pbsnode));
+  pnode.change_name("napali");
 
   fail_unless(process_reservation_id(&pnode, "12") == 0, "couldn't process reservation");
   fail_unless(process_reservation_id(&pnode, "13") == 0, "couldn't process reservation");

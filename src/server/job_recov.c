@@ -111,7 +111,7 @@
 #include "log.h"
 #include "../lib/Liblog/pbs_log.h"
 #include "../lib/Liblog/log_event.h"
-#include "../lib/Libifl/lib_ifl.h"
+#include "lib_ifl.h"
 #include "svrfunc.h"
 #include "server.h"
 #include "alps_constants.h"
@@ -128,6 +128,7 @@
 #include "array.h"
 #include "ji_mutex.h"
 #include "job_recov.h"
+#include "policy_values.h"
 
 #ifndef TRUE
 #define TRUE 1
@@ -140,9 +141,12 @@
 
 #ifdef PBS_MOM
 int recov_tmsock(int, job *);
-extern unsigned int pbs_mom_port;
-extern unsigned int pbs_rm_port;
+extern unsigned int  pbs_mom_port;
+extern unsigned int  pbs_rm_port;
 extern int           multi_mom;
+#else
+extern char         *pbs_o_host;
+extern char          server_name[];
 #endif
 
 extern int job_qs_upgrade(job *, int, char *, int);
@@ -152,6 +156,8 @@ extern int job_qs_upgrade(job *, int, char *, int);
 extern char  *path_jobs;
 extern const char *PJobSubState[];
 extern int LOGLEVEL;
+
+const int DEFAULT_ARRAY_RECOV_SIZE = 101;
 
 /* data global only to this file */
 
@@ -480,23 +486,31 @@ void decode_attribute(
   if (index < 0)
     index = JOB_ATR_UNKN;
 
-  if(freeExisting)
+  if (freeExisting)
     {
     job_attr_def[index].at_free(&pj->ji_wattr[index]);
     }
 
-  job_attr_def[index].at_decode(
-    &pj->ji_wattr[index],
-     pal->al_name,
-     pal->al_resc,
-     pal->al_value,
-     ATR_DFLAG_ACCESS);
+  if (index == JOB_ATR_hold)
+    {
+    // JOB_ATR_hold is written to file as a number so it won't decode correctly
+    pj->ji_wattr[index].at_val.at_long = strtol(pal->al_value, NULL, 10);
+    }
+  else
+    {
+    job_attr_def[index].at_decode(
+      &pj->ji_wattr[index],
+       pal->al_name,
+       pal->al_resc,
+       pal->al_value,
+       ATR_DFLAG_ACCESS);
+    }
 
   if (job_attr_def[index].at_action != NULL)
     job_attr_def[index].at_action(&pj->ji_wattr[index], pj, ATR_ACTION_RECOV);
 
   pj->ji_wattr[index].at_flags =  pal->al_flags & ~ATR_VFLAG_MODIFY;
-  }
+  } // END decode_attribute()
 
 
 int fill_resource_list(
@@ -567,6 +581,7 @@ int parse_attributes(
   xmlNode      *cur_node = NULL;
   xmlNode      *resource_list_node = NULL;
   xmlNode      *resources_used_node = NULL;
+  xmlNode      *complete_req_node = NULL;
   bool          element_found = false;
 
   for (cur_node = attr_node->children; cur_node != NULL && rc == PBSE_NONE; cur_node = cur_node->next)
@@ -581,6 +596,8 @@ int parse_attributes(
       resource_list_node = cur_node;
     else if (!(strcmp((const char*)cur_node->name,  ATTR_used)))
       resources_used_node = cur_node;
+    else if (!(strcmp((const char *)cur_node->name, ATTR_req_information)))
+      complete_req_node = cur_node;
     else
       {
       svrattrl *pal = NULL;
@@ -613,6 +630,9 @@ int parse_attributes(
     rc = fill_resource_list(pj, resource_list_node, log_buf, buf_len, ATTR_l);
   if (rc == PBSE_NONE && resources_used_node)
     rc = fill_resource_list(pj, resources_used_node, log_buf, buf_len, ATTR_used);
+  if ((rc == PBSE_NONE) &&
+      (complete_req_node))
+    rc = fill_resource_list(pj, complete_req_node, log_buf, buf_len, ATTR_req_information);
   else if (element_found == false)
     {
     snprintf(log_buf, buf_len, "%s", "Error: there were no job attributes found"); 
@@ -895,7 +915,7 @@ void translate_dependency_to_string(
       unsigned int dp_jobs_size = dep->dp_jobs.size();
       for (unsigned int i = 0; i < dp_jobs_size; i++)
         {
-        struct depend_job *pdjob = dep->dp_jobs[i];
+        depend_job *pdjob = dep->dp_jobs[i];
         value += ":";
         value += pdjob->dc_child;
 
@@ -931,6 +951,7 @@ int add_encoded_attributes(
   CLEAR_HEAD(lhead);
   xmlNodePtr  resource_list_head_node = NULL;
   xmlNodePtr  resource_used_head_node = NULL;
+  xmlNodePtr  complete_req_head_node = NULL;
 
   for (i = 0; ((i < JOB_ATR_LAST) && (rc >= 0)); i++)
     {
@@ -938,7 +959,8 @@ int add_encoded_attributes(
         ((pattr + i)->at_flags & ATR_VFLAG_SET))
       {
       if ((i != JOB_ATR_resource) &&
-          (i != JOB_ATR_resc_used))
+          (i != JOB_ATR_resc_used) &&
+          (i != JOB_ATR_req_information))
         {
         std::string value;
 
@@ -947,7 +969,7 @@ int add_encoded_attributes(
           translate_dependency_to_string(pattr + i, value);
         else
 #endif
-          attr_to_str(value, job_attr_def + i, pattr[i], false);
+          attr_to_str(value, job_attr_def + i, pattr[i], true);
 
         if (value.size() == 0)
           continue;
@@ -980,16 +1002,34 @@ int add_encoded_attributes(
 
         while ((pal = (svrattrl *)GET_NEXT(lhead)) != NULL)
           {
-          if (i == JOB_ATR_resource) 
-            pal_xmlNode = add_resource_list_attribute(ATTR_l, attr_node, &resource_list_head_node, pal);
+          if (i == JOB_ATR_resource)
+            {
+            pal_xmlNode = add_resource_list_attribute(ATTR_l,
+                                                      attr_node,
+                                                      &resource_list_head_node,
+                                                      pal);
+            }
+          else if (i == JOB_ATR_req_information)
+            {
+            pal_xmlNode = add_resource_list_attribute(ATTR_req_information,
+                                                      attr_node,
+                                                      &complete_req_head_node,
+                                                      pal);
+            }
           else
-            pal_xmlNode = add_resource_list_attribute(ATTR_used, attr_node, &resource_used_head_node, pal);
+            {
+            pal_xmlNode = add_resource_list_attribute(ATTR_used,
+                                                      attr_node,
+                                                      &resource_used_head_node,
+                                                      pal);
+            }
 
             if (pal_xmlNode)
               {
               snprintf(buf, sizeof(buf), "%u", (unsigned int)pal->al_flags);
               xmlSetProp(pal_xmlNode, (const xmlChar *)AL_FLAGS_ATTR, (const xmlChar *)buf);
               }
+
             delete_link(&pal->al_link);
             free(pal);
             if (!pal_xmlNode)
@@ -1179,7 +1219,7 @@ int job_save(
 #ifdef PBS_MOM
   tmp_ptr = JOB_FILE_SUFFIX;
 #else
-  if (pjob->ji_is_array_template == TRUE)
+  if (pjob->ji_is_array_template == true)
     tmp_ptr = (char *)JOB_FILE_TMP_SUFFIX;
   else
     tmp_ptr = (char *)JOB_FILE_SUFFIX;
@@ -1252,6 +1292,167 @@ int job_save(
   }  /* END job_save() */
 
 
+#ifndef PBS_MOM
+/*
+ * ghost_create_jobs_array()
+ *
+ * Automatically creates an array for pjob so that it doesn't have to be deleted. This job's array
+ * was not properly recovered, and we don't want to lose the jobs.
+ *
+ * @param pjob - the job whose array wasn't recovered.
+ * @param array_id - the id of the array to be created.
+ * @return - a pointer to the new job array
+ */
+
+job_array *ghost_create_jobs_array(
+
+  job        *pjob,
+  const char *array_id)
+
+  {
+  job_array   *pa = new job_array();
+  long         array_size = DEFAULT_ARRAY_RECOV_SIZE;
+  char         log_buf[LOCAL_LOG_BUF_SIZE];
+  char         file_prefix_work[PBS_JOBBASE + 1];
+  long         slot_limit = NO_SLOT_LIMIT;
+
+  if (LOGLEVEL >= 2)
+    {
+    snprintf(log_buf, sizeof(log_buf),
+      "Array %s was not successfully recovered, but we are creating it automatically to not lose the sub-jobs. Slot limits and or dependencies may not work correctly. This behavior can be disabled by setting ghost_array_recovery to false in qmgr.", array_id);
+    log_event(PBSEVENT_JOB, PBS_EVENTCLASS_JOB, pjob->ji_qs.ji_jobid, log_buf);
+    }
+  
+  lock_ai_mutex(pa, __func__, NULL, LOGLEVEL);
+
+  pa->set_array_id(array_id);
+  
+  get_svr_attr_l(SRV_ATR_MaxSlotLimit, &slot_limit);
+  pa->ai_qs.slot_limit = slot_limit;
+
+  // Remove the [] from the file prefix
+  snprintf(file_prefix_work, sizeof(file_prefix_work), "%s", array_id);
+  char *open = strchr(file_prefix_work, '[');
+  char *dot = strchr(file_prefix_work, '.');
+
+  if (open != NULL)
+    {
+    *open = '\0';
+    if (dot != NULL)
+      snprintf(pa->ai_qs.fileprefix, sizeof(pa->ai_qs.fileprefix), "%s%s", file_prefix_work, dot);
+    else
+      snprintf(pa->ai_qs.fileprefix, sizeof(pa->ai_qs.fileprefix), "%s", file_prefix_work);
+    }
+  else
+    snprintf(pa->ai_qs.fileprefix, sizeof(pa->ai_qs.fileprefix), "%s", file_prefix_work);
+
+  pa->set_owner(pjob->ji_wattr[JOB_ATR_job_owner].at_val.at_str);
+  snprintf(pa->ai_qs.submit_host, sizeof(pa->ai_qs.submit_host), "%s",
+    get_variable(pjob, pbs_o_host));
+    
+  if (pjob->ji_wattr[JOB_ATR_job_array_id].at_val.at_long > array_size)
+    array_size = pjob->ji_wattr[JOB_ATR_job_array_id].at_val.at_long + 1;
+
+  pa->job_ids = (char **)calloc(array_size, sizeof(char *));
+  pa->job_ids[(int)pjob->ji_wattr[JOB_ATR_job_array_id].at_val.at_long] = strdup(pjob->ji_qs.ji_jobid);
+
+  pa->ai_qs.array_size = array_size;
+  pa->ai_ghost_recovered = true;
+  array_save(pa);
+
+  /* link the struct into the servers list of job arrays */
+  insert_array(pa);
+
+  return(pa);
+  } // END ghost_create_jobs_array()
+
+
+
+/*
+ * check_and_reallocate_job_ids()
+ *
+ * Reallocates the job_ids array of pa if necessary to make space for the new job id at index
+ *
+ * @param pa - the job array that we're checking to make sure has enough space for this job id
+ * @param index - the index of the new job id
+ */
+
+void check_and_reallocate_job_ids(
+
+  job_array *pa,
+  int        index)
+
+  {
+  if (pa->ai_qs.array_size <= index)
+    {
+    int new_size = pa->ai_qs.array_size * 2;
+
+    while (new_size <= index)
+      new_size *= 2;
+
+    char **new_ids = (char **)calloc(new_size, sizeof(char *));
+    memcpy(new_ids, pa->job_ids, (sizeof(char *) * pa->ai_qs.array_size));
+    free(pa->job_ids);
+
+    pa->job_ids = new_ids;
+    pa->ai_qs.array_size = new_size;
+    }
+  } // END check_and_reallocate_job_ids()
+
+
+
+/*
+ * update_recovered_array_values()
+ *
+ * Updates the internal counts for pa to account for this job
+ *
+ * @param pa - the array
+ * @param pjob - the job
+ */
+void update_recovered_array_values(
+
+  job_array *pa,
+  job       *pjob)
+
+  {
+  pa->ai_qs.num_jobs++;
+
+  switch (pjob->ji_qs.ji_state)
+    {
+    case JOB_STATE_RUNNING:
+
+      pa->ai_qs.num_started++;
+      pa->ai_qs.jobs_running++;
+
+      break;
+
+    case JOB_STATE_COMPLETE:
+
+      pa->ai_qs.num_started++;
+      pa->ai_qs.jobs_done++;
+
+      if (pjob->ji_wattr[JOB_ATR_exitstat].at_val.at_long == 0)
+        pa->ai_qs.num_successful++;
+      else
+        pa->ai_qs.num_failed++;
+
+      break;
+    }
+
+  } // END update_recovered_array_values()
+#endif
+
+
+
+/*
+ * set_array_job_ids()
+ *
+ * Updates the array struct with pjob's information
+ *
+ * @param pjob - a pointer to the pointer to the job
+ * @param log_buf - a buffer for logging
+ * @param buflen - the size of the buffer
+ */
 
 int set_array_job_ids(
 
@@ -1266,6 +1467,22 @@ int set_array_job_ids(
   job_array *pa;
   char       parent_id[PBS_MAXSVRJOBID + 1];
 
+  // If this variable isn't set this job isn't actually an array subjob.
+  if ((pj->ji_wattr[JOB_ATR_job_array_id].at_flags & ATR_VFLAG_SET) == 0)
+    {
+    // Check and set if this is the array template job
+    char *open_bracket = strchr(pj->ji_qs.ji_jobid, '[');
+    if (open_bracket != NULL)
+      {
+      if (*(open_bracket + 1) == ']')
+        pj->ji_is_array_template = true;
+      else
+        return(rc);
+      }
+    else
+      return(rc);
+    }
+
   if (strchr(pj->ji_qs.ji_jobid, '[') != NULL)
     {
     /* job is part of an array.  We need to put a link back to the server
@@ -1275,20 +1492,35 @@ int set_array_job_ids(
     array_get_parent_id(pj->ji_qs.ji_jobid, parent_id);
     pa = get_array(parent_id);
     if (pa == NULL)
-      {   
-      job_abt(&pj, (char *)"Array job missing array struct, aborting job");
-      snprintf(log_buf, buflen, "Array job missing array struct %s", __func__);
-      return -1;
+      {
+      if (ghost_array_recovery)
+        {
+        pa = ghost_create_jobs_array(pj, parent_id);
+        }
+      else
+        {
+        job_abt(&pj, "Array job missing array struct, aborting job");
+        snprintf(log_buf, buflen, "array struct missing for array job %s", pj->ji_qs.ji_jobid);
+        return(-1);
+        }
       }
 
     strcpy(pj->ji_arraystructid, parent_id);
 
     if (strcmp(parent_id, pj->ji_qs.ji_jobid) == 0)
       {
-      pj->ji_is_array_template = TRUE;
+      pj->ji_is_array_template = true;
       }
     else
       {
+      // If the original array wasn't recovered, then we don't know if we have the right size for
+      // job_ids. Check and ensure that it's big enough.
+      if (pa->ai_ghost_recovered)
+        {
+        check_and_reallocate_job_ids(pa, pj->ji_wattr[JOB_ATR_job_array_id].at_val.at_long);
+        update_recovered_array_values(pa, pj);
+        }
+
       pa->job_ids[(int)pj->ji_wattr[JOB_ATR_job_array_id].at_val.at_long] = strdup(pj->ji_qs.ji_jobid);
       pa->jobs_recovered++;
 
@@ -1311,16 +1543,18 @@ int set_array_job_ids(
       }
     }
 #endif /* !PBS_MOM */
-  return rc;
+
+  return(rc);
   }
 
 
 int job_recov_xml(
 
-  const char *filename,  /* I */   /* pathname to job save file */
-  job  **pjob,     /* M */   /* pointer to a pointer of job structure to fill info */
-  char *log_buf,   /* O */   /* buffer to hold error message */
-  size_t buf_len)  /* I */   /* len of the error buffer */
+  const char  *filename,  /* I */   /* pathname to job save file */
+  job        **pjob,     /* M */   /* pointer to a pointer of job structure to fill info */
+  char        *log_buf,   /* O */   /* buffer to hold error message */
+  size_t       buf_len)  /* I */   /* len of the error buffer */
+
   {
   xmlDoc *doc = NULL;
   xmlNode *root_element = NULL;
@@ -1521,9 +1755,12 @@ job *job_recov(
   int   rc;
 #ifdef PBS_MOM
   char namebuf[MAXPATHLEN];
-#endif
 
+  pj = mom_job_alloc();
+
+#else
   pj = job_alloc(); /* allocate & initialize job structure space */
+#endif
 
   if (pj == NULL)
     {
@@ -1557,14 +1794,13 @@ job *job_recov(
       log_err(errno, __func__, log_buf);
 
 #ifndef PBS_MOM
-      unlock_ji_mutex(pj, __func__, "1", LOGLEVEL);
-      free(pj->ji_mutex);
+      delete pj;
+#else
+      free(pj);
 #endif
-      free((char *)pj);
       } /* sometime pjob is freed by abt_job() */
     return(NULL);
     }
-  
   
   pj->ji_commit_done = 1;
 

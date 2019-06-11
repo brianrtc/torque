@@ -1,4 +1,7 @@
 #include "license_pbs.h" /* See here for the software license */
+
+#include <pbs_config.h>
+
 #include "svr_jobfunc.h"
 #include "pbs_job.h"
 #include "server.h"
@@ -8,29 +11,138 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string>
+#include <vector>
 #include "pbs_error.h"
 #include "resource.h"
 #include "work_task.h"
+#include "complete_req.hpp"
+#include "attr_req_info.hpp"
 
 int lock_ji_mutex(job *pjob, const char *id, const char *msg, int logging);
 int chk_mppnodect(resource *mppnodect, pbs_queue *pque, long nppn, long mpp_width, char *EMsg);
 void job_wait_over(struct work_task *);
 bool is_valid_state_transition(job &pjob, int newstate, int newsubstate);
+bool has_conflicting_resource_requests(job *pjob, pbs_queue *pque);
 
 extern int decrement_count;
 extern job napali_job;
 extern attribute_def job_attr_def[];
+extern std::string set_resource;
+
+extern bool possible;
+extern bool get_jobs_queue_force_null;
+extern std::string global_log_buf;
 
 void add_resc_attribute(pbs_attribute *pattr, resource_def *prdef, const char *value)
   {
-  resource *rsc = (resource *)calloc(1, sizeof(resource));
-  fail_unless(rsc != NULL, "unable to allocate a resource");
-  rsc->rs_defin = prdef;
-  rsc->rs_value.at_type = prdef->rs_type;
+  if (pattr->at_val.at_ptr == NULL)
+    {
+    pattr->at_val.at_ptr = new std::vector<resource>();
+    }
+
+  std::vector<resource> *resources = (std::vector<resource> *)pattr->at_val.at_ptr;
+  resource rsc;
+  rsc.rs_defin = prdef;
+  rsc.rs_value.at_type = prdef->rs_type;
+  rsc.rs_value.at_val.at_str = strdup(value);
+  resources->push_back(rsc);
   pattr->at_flags = ATR_VFLAG_SET;
-  pattr->at_val.at_str = (char *)strdup(value);
-  append_link(&pattr->at_val.at_list, &rsc->rs_link, rsc);
+  pattr->at_val.at_ptr = resources;
   }
+
+
+START_TEST(test_numa_task_exceeds_resources)
+  {
+  job          *pjob = (job *)calloc(1, sizeof(job));
+  req           r;
+
+  possible = true;
+  complete_req  cr;
+  pjob->ji_wattr[JOB_ATR_req_information].at_val.at_ptr = &cr;
+  }
+END_TEST
+
+
+START_TEST(has_conflicting_resource_requeusts_test)
+  {
+  job       *pjob = (job *)calloc(1, sizeof(job));
+  pbs_queue *pque = (pbs_queue *)calloc(1, sizeof(pbs_queue));
+
+  pjob->ji_wattr[JOB_ATR_req_information].at_flags = ATR_VFLAG_SET;
+  pque->qu_attr[QA_ATR_ResourceDefault].at_flags = ATR_VFLAG_SET;
+
+  set_resource = "nodes";
+  fail_unless(has_conflicting_resource_requests(pjob, pque) == true);
+
+  set_resource = "trl";
+  fail_unless(has_conflicting_resource_requests(pjob, pque) == true);
+
+  set_resource = "size";
+  fail_unless(has_conflicting_resource_requests(pjob, pque) == true);
+
+  set_resource = "mppwidth";
+  fail_unless(has_conflicting_resource_requests(pjob, pque) == true);
+
+  set_resource = "mem";
+  fail_unless(has_conflicting_resource_requests(pjob, pque) == true);
+
+  set_resource = "hostlist";
+  fail_unless(has_conflicting_resource_requests(pjob, pque) == true);
+
+  set_resource = "ncpus";
+  fail_unless(has_conflicting_resource_requests(pjob, pque) == true);
+
+  set_resource = "procs";
+  fail_unless(has_conflicting_resource_requests(pjob, pque) == true);
+
+  set_resource = "pvmem";
+  fail_unless(has_conflicting_resource_requests(pjob, pque) == true);
+
+  set_resource = "pmem";
+  fail_unless(has_conflicting_resource_requests(pjob, pque) == true);
+
+  set_resource = "vmem";
+  fail_unless(has_conflicting_resource_requests(pjob, pque) == true);
+
+  set_resource = "reqattr";
+  fail_unless(has_conflicting_resource_requests(pjob, pque) == true);
+
+  set_resource = "software";
+  fail_unless(has_conflicting_resource_requests(pjob, pque) == true);
+
+  set_resource = "geometry";
+  fail_unless(has_conflicting_resource_requests(pjob, pque) == true);
+
+  set_resource = "opsys";
+  fail_unless(has_conflicting_resource_requests(pjob, pque) == true);
+
+  set_resource = "tpn";
+  fail_unless(has_conflicting_resource_requests(pjob, pque) == true);
+
+  set_resource = "walltime";
+  fail_unless(has_conflicting_resource_requests(pjob, pque) == false);
+
+  set_resource = "epilogue";
+  fail_unless(has_conflicting_resource_requests(pjob, pque) == false);
+
+  // Make sure we allow conflicting resources if the queue has 
+  pque->qu_attr[QA_ATR_ReqInformationDefault].at_flags = ATR_VFLAG_SET;
+  set_resource = "tpn";
+  fail_unless(has_conflicting_resource_requests(pjob, pque) == false);
+  set_resource = "vmem";
+  fail_unless(has_conflicting_resource_requests(pjob, pque) == false);
+  set_resource = "nodes";
+  fail_unless(has_conflicting_resource_requests(pjob, pque) == false);
+  
+  pque->qu_attr[QA_ATR_ResourceDefault].at_flags = 0;
+  pque->qu_attr[QA_ATR_ReqInformationDefault].at_flags = ATR_VFLAG_SET;
+  set_resource = "nodes";
+  fail_unless(has_conflicting_resource_requests(pjob, pque) == true);
+
+  set_resource = "walltime";
+  fail_unless(has_conflicting_resource_requests(pjob, pque) == false);
+  }
+END_TEST
 
 
 START_TEST(is_valid_state_transition_test)
@@ -92,10 +204,10 @@ START_TEST(svr_enquejob_test)
 
   memset(&test_job, 0, sizeof(test_job));
 
-  result = svr_enquejob(NULL, 0, NULL, false);
+  result = svr_enquejob(NULL, 0, NULL, false, false);
   fail_unless(result != PBSE_NONE, "NULL input pointer fail");
 
-  result = svr_enquejob(&test_job, 0, NULL, false);
+  result = svr_enquejob(&test_job, 0, NULL, false, false);
   /*Need more complicated mocking in order to have other result than PBSE_JOBNOTFOUND*/
   fail_unless(result == PBSE_JOBNOTFOUND, "svr_enquejob fail: %d", result);
 
@@ -117,6 +229,13 @@ START_TEST(svr_dequejob_test)
 
   j.ji_qs.ji_state = JOB_STATE_RUNNING;
   fail_unless(svr_dequejob(&j, 0) == PBSE_BADSTATE);
+
+  // confirm expected error message
+  j.ji_is_array_template = TRUE;
+  strcpy(j.ji_qs.ji_jobid, "999.foo");
+  get_jobs_queue_force_null = true;
+  fail_unless(svr_dequejob(&j, 0) == PBSE_JOB_NOT_IN_QUEUE);
+  fail_unless(strcmp(global_log_buf.c_str(), "Job 999.foo has no queue") == 0);
   }
 END_TEST
 
@@ -145,6 +264,7 @@ START_TEST(svr_setjobstate_test)
   result = svr_setjobstate(&test_job, 1, 2, 3);
   fail_unless(result == PBSE_NONE, "svr_setjobstate fail");
 
+  get_jobs_queue_force_null = false;
   test_job.ji_qs.ji_state = JOB_STATE_RUNNING;
   test_job.ji_wattr[JOB_ATR_exec_host].at_val.at_str = strdup("napali/0");
   fail_unless(svr_setjobstate(&test_job, JOB_STATE_QUEUED, JOB_SUBSTATE_QUEUED, FALSE) == PBSE_NONE);
@@ -296,7 +416,7 @@ START_TEST(chk_resc_min_limits_test)
   server.sv_qs_mutex = (pthread_mutex_t *)calloc(1, sizeof(pthread_mutex_t));
   server.sv_attr_mutex = (pthread_mutex_t *)calloc(1, sizeof(pthread_mutex_t));
   server.sv_jobstates_mutex = (pthread_mutex_t *)calloc(1, sizeof(pthread_mutex_t));
-  server.sv_attr[SRV_ATR_QCQLimits].at_val.at_long = 0;
+  server.sv_attr[SRV_ATR_QCQLimits].at_val.at_bool = false;
 
   pthread_mutex_init(server.sv_qs_mutex,NULL);
   pthread_mutex_init(server.sv_attr_mutex,NULL);
@@ -314,11 +434,6 @@ START_TEST(chk_resc_min_limits_test)
 
   result = chk_resc_limits(&test_attribute, &test_queue, message);
   fail_unless(result == PBSE_NONE, "Fail to approve queue minimum resource");
-
-  free(test_attribute.at_val.at_str);
-  test_attribute.at_val.at_str = strdup("2:ppn=1");
-  /* cant do the  real test because comp_resc2 is mocked for the other tests */
-  /* fail_unless(result != PBSE_NONE, "Fail to detect minim resource not met"); */
   }
 END_TEST
 
@@ -613,6 +728,7 @@ Suite *svr_jobfunc_suite(void)
 
   tc_core = tcase_create("set_resc_deflt_test");
   tcase_add_test(tc_core, set_resc_deflt_test);
+  tcase_add_test(tc_core, test_numa_task_exceeds_resources);
   suite_add_tcase(s, tc_core);
 
   tc_core = tcase_create("set_chkpt_deflt_test");
@@ -622,6 +738,7 @@ Suite *svr_jobfunc_suite(void)
   tc_core = tcase_create("set_statechar_test");
   tcase_add_test(tc_core, set_statechar_test);
   tcase_add_test(tc_core, is_valid_state_transition_test);
+  tcase_add_test(tc_core, has_conflicting_resource_requeusts_test);
   suite_add_tcase(s, tc_core);
 
   tc_core = tcase_create("lock_ji_mutex_test");

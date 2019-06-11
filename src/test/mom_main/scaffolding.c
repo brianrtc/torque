@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <netdb.h> /* hostent */
 #include <sstream>
+#include <list>
 
 #include "mom_func.h" /* sig_tbl */
 #include "pbs_job.h" /* job, pjobexec_t, task, pjobexec_t */
@@ -22,23 +23,28 @@
 #include "log.h" /* LOG_BUF_SIZE */
 #include "tcp.h"
 #include "mom_config.h"
+#include "machine.hpp"
 #include <string>
 #include <vector>
 #include <boost/ptr_container/ptr_vector.hpp>
+#include "authorized_hosts.hpp"
 
 extern mom_hierarchy_t *mh;
 
-#ifdef PENABLE_LINUX26_CPUSETS
+#ifdef PENABLE_LINUX_CGROUPS
 #include "pbs_cpuset.h"
 #include "node_internals.hpp"
+#include "machine.hpp"
 
 #endif
 
-
+bool   thread_unlink_calls;
 extern mom_hierarchy_t *mh;
-
+std::list<job *> alljobs_list;
+int              job_exit_wait_time = DEFAULT_JOB_EXIT_WAIT_TIME;
 mom_server     mom_servers[PBS_MAXSERVER];
 int mom_server_count = 0;
+int MOMCudaVisibleDevices;
 const char *msg_daemonname = "unset";
 struct sig_tbl sig_tbl[2];
 char pbs_current_user[PBS_MAXUSER];
@@ -46,7 +52,7 @@ extern char *server_alias;
 const char *dis_emsg[10];
 long *log_event_mask = NULL;
 int rpp_dbprt = 0;
-extern long pe_alarm_time;
+long pe_alarm_time;
 struct connection svr_conn[PBS_NET_MAX_CONNECTIONS];
 struct config standard_config[2];
 struct config dependent_config[2];
@@ -59,44 +65,94 @@ time_t wait_time = 10;
 boost::ptr_vector<std::string> mom_status;
 pthread_mutex_t log_mutex = PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP;
 char log_buffer[LOG_BUF_SIZE];
-extern int job_exit_wait_time;
-extern char      config_file[];
-extern char      xauth_path[];
-extern int       MOMConfigRReconfig;
-extern long      TJobStartBlockTime; /* seconds to wait for job to launch before backgrounding */
-extern int       ServerStatUpdateInterval;
-extern int       ignmem;
-extern int       igncput;
-extern int       PBSNodeCheckInterval;
-extern int       hostname_specified;
-extern char      rcp_path[];
+char      config_file[_POSIX_PATH_MAX];
+char      xauth_path[1024];
+int       MOMConfigRReconfig;
+long      TJobStartBlockTime; /* seconds to wait for job to launch before backgrounding */
+int       ServerStatUpdateInterval;
+int       ignmem;
+int       igncput;
+int       PBSNodeCheckInterval;
+int       hostname_specified;
+char      rcp_path[MAXPATHLEN];
 extern char      tmpdir_basename[];  /* for $TMPDIR */
-extern float     max_load_val;
-extern int       MOMConfigDownOnError;
-extern int       mask_num;
+float     max_load_val;
+int       MOMConfigDownOnError;
+int       mask_num;
 extern char      PBSNodeMsgBuf[];
-extern int       MOMConfigRestart;
-attribute_def    job_attr_def[1];
-extern int       LOGKEEPDAYS;
-extern long      log_file_roll_depth;
-extern char      extra_parm[];
-extern struct config   *config_array;
-extern char    **maskclient; /* wildcard connections */
-extern char      PBSNodeCheckPath[];
-extern int       CheckPollTime;
-extern char      rcp_args[];
-extern long      log_file_max_size;
-extern char      mom_host[];
-extern int       rm_errno;
-extern int       config_file_specified;
-extern char      MOMConfigVersion[];
-extern struct    config common_config[];
+int       MOMConfigRestart;
+attribute_def    job_attr_def[JOB_ATR_LAST];
+int       LOGKEEPDAYS;
+long      log_file_roll_depth;
+char             extra_parm[] = "extra parameter(s)";
+struct config   *config_array = NULL;
+char           **maskclient = NULL; /* wildcard connections */
+char             PBSNodeCheckPath[MAXLINE];
+int       CheckPollTime;
+char             rcp_args[MAXPATHLEN];
+long      log_file_max_size;
+char             mom_host[PBS_MAXHOSTNAME + 1];
+int       rm_errno;
+int       config_file_specified;
+char             MOMConfigVersion[64];
+struct config common_config[1];
 char           **ArgV;
 char            *OriginalPath;
-extern int       resend_join_job_wait_time;
-extern int       max_join_job_wait_time;
+int       resend_join_job_wait_time;
+int       max_join_job_wait_time;
 bool   parsing_hierarchy = false;
-extern bool received_cluster_addrs;
+bool received_cluster_addrs;
+bool am_i_ms;
+
+int job_bailed = 0;
+
+int setbool(
+
+  const char *value) /* I */
+
+  {
+  int enable = -1;
+
+  if (value != NULL)
+    {
+
+    switch (value[0])
+      {
+
+      case 't':
+      case 'T':
+      case 'y':
+      case 'Y':
+      case '1':
+        enable = 1;
+        break;
+
+      case 'f':
+      case 'F':
+      case 'n':
+      case 'N':
+      case '0':
+        enable = 0;
+        break;
+
+      case 'o':
+      case 'O':
+        if ((strcasecmp(value,"on") == 0))
+          enable = 1;
+        else if ((strcasecmp(value,"off") == 0))
+          enable = 0;
+        break;
+
+      }
+
+    }
+
+  return(enable);
+  }
+
+int wsi_ret = 0;
+int wcs_ret = 0;
+int flush_ret = 0;
 
 void save_args(int argc, char **argv) {}
 
@@ -128,8 +184,6 @@ int mom_close_poll(void)
 
 void init_abort_jobs(int recover)
   {
-  fprintf(stderr, "The call to init_abort_jobs needs to be mocked!!\n");
-  exit(1);
   }
 
 int mom_server_add(const char *value)
@@ -140,20 +194,15 @@ int mom_server_add(const char *value)
 
 int job_save(job *pjob, int updatetype, int mom_port)
   {
-  fprintf(stderr, "The call to job_save needs to be mocked!!\n");
-  exit(1);
+  return(PBSE_NONE);
   }
 
 void mom_job_purge(job *pjob)
   {
-  fprintf(stderr, "The call to job_purge needs to be mocked!!\n");
-  exit(1);
   }
 
 void scan_non_child_tasks(void)
   {
-  fprintf(stderr, "The call to scan_non_child_tasks needs to be mocked!!\n");
-  exit(1);
   }
 
 extern "C"
@@ -203,8 +252,7 @@ void mom_checkpoint_set_directory_path(const char *str)
 
 void exec_bail(job *pjob, int code, std::set<int> *sisters_contacted)
   {
-  fprintf(stderr, "The call to exec_bail needs to be mocked!!\n");
-  exit(1);
+  job_bailed++;
   }
 
 int AVL_list(AvlTree tree, char **Buf, long *current_len, long *max_len)
@@ -249,10 +297,9 @@ int log_init(const char *suffix, const char *hostname)
   exit(1);
   }
 
-int post_epilogue(job *pjob, int ev)
+int send_job_obit(job *pjob, int ev)
   {
-  fprintf(stderr, "The call to post_epilogue needs to be mocked!!\n");
-  exit(1);
+  return(PBSE_NONE);
   }
 
 char *get_job_envvar(job *pjob, const char *variable)
@@ -357,7 +404,7 @@ void net_close(int but)
   exit(1);
   }
 
-int kill_task(task *ptask, int sig, int pg)
+int kill_task(job *pjob, task *ptask, int sig, int pg)
   {
   fprintf(stderr, "The call to kill_task needs to be mocked!!\n");
   exit(1);
@@ -377,14 +424,12 @@ void mom_server_all_init(void)
 
 int DIS_tcp_wflush(tcp_chan *chan)
   {
-  fprintf(stderr, "The call to DIS_tcp_wflush needs to be mocked!!\n");
-  exit(1);
+  return(flush_ret);
   }
 
 int diswcs(tcp_chan *chan, const char *value, size_t nchars)
   {
-  fprintf(stderr, "The call to diswcs needs to be mocked!!\n");
-  exit(1);
+  return(wcs_ret);
   }
 
 void mom_checkpoint_check_periodic_timer(job *pjob)
@@ -493,7 +538,7 @@ void term_job(job *pjob)
   exit(1);
   }
 
-struct passwd * getpwnam_ext(char * user_name)
+struct passwd * getpwnam_ext(char **user_buf, char * user_name)
   {
   fprintf(stderr, "The call to getpwnam_ext needs to be mocked!!\n");
   exit(1);
@@ -627,8 +672,7 @@ mom_hierarchy_t *initialize_mom_hierarchy(void)
 
 int diswsi(tcp_chan *chan, int value)
   {
-  fprintf(stderr, "The call to diswsi needs to be mocked!!\n");
-  exit(1);
+  return(wsi_ret);
   }
 
 void mom_server_all_diag(std::stringstream &output)
@@ -669,8 +713,7 @@ char *netaddr(struct sockaddr_in *sai)
 
 int tcp_connect_sockaddr(struct sockaddr *sa, size_t sa_size, bool use_log)
   {
-  fprintf(stderr, "The call to tcp_connect_sockaddr needs to be mocked!!\n");
-  exit(1);
+  return(5);
   }
 
 void clear_servers()
@@ -685,7 +728,7 @@ int diswul(tcp_chan *chan, unsigned long value)
   exit(1);
   }
 
-int im_compose(tcp_chan *chan, char *jobid, char *cookie, int command, tm_event_t event, tm_task_id taskid)
+int im_compose(tcp_chan *chan, char *jobid, const char *cookie, int command, tm_event_t event, tm_task_id taskid)
   {
   fprintf(stderr, "The call to im_compose needs to be mocked!!\n");
   exit(1);
@@ -754,7 +797,7 @@ void free_mom_hierarchy(mom_hierarchy_t *nh) {}
 
 bool am_i_mother_superior(const job &pjob)
   {
-  return(false);
+  return(am_i_ms);
   }
 
 char *pbse_to_txt(int err)
@@ -764,7 +807,7 @@ char *pbse_to_txt(int err)
   }
 
 
-#ifdef PENABLE_LINUX26_CPUSETS
+#ifdef PENABLE_LINUX_CGROUPS 
 
 int hwloc_topology_init(hwloc_topology_t *)
   {
@@ -800,12 +843,40 @@ int init_torque_cpuset(void)
   return 0;
   }
 
+int trq_cg_initialize_hierarchy()
+  {
+  return(0);
+  }
+
+int trq_cg_cleanup_torque_cgroups()
+  {
+  return(0);
+  }
+
 
 node_internals::node_internals(void){}
 
 numa_node::numa_node(numa_node const&){}
 
 allocation::allocation(allocation const&){}
+
+int Machine::initializeMachine(hwloc_topology_t topology)
+  {
+  return(0);
+  }
+
+Machine::Machine(){}
+Machine::~Machine(){}
+Socket::Socket(){}
+Socket::~Socket(){}
+Chip::Chip(){}
+Chip::~Chip(){}
+Core::Core(){}
+Core::~Core(){}
+PCI_Device::PCI_Device(){}
+PCI_Device::~PCI_Device(){}
+
+
 
 void recover_cpuset_reservation(job &pjob)
   {
@@ -869,3 +940,199 @@ time_t get_stat_update_interval()
   }
 
 void empty_received_nodes() {}
+
+void start_request_pool(
+
+    threadpool_t *tp)
+
+  {
+  return;
+  }
+
+void Machine::displayAsString(std::stringstream &out) const {}
+
+unsigned long setenablemomrestart(
+
+  const char *value)  /* I */
+
+  {
+  return(0);
+  }
+
+u_long setrcpcmd(
+
+  const char *Value)  /* I */
+
+  {
+  return(0);
+  }
+
+unsigned long jobstartblocktime(
+
+  const char *value)  /* I */
+  
+  {
+  return(0);
+  }
+
+char *tokcpy(
+
+  char *str,
+  char *tok)
+
+  {
+  return(NULL);
+  }
+
+unsigned long setloglevel(
+
+  const char *value)  /* I */
+
+  {
+  return(0);
+  }
+
+unsigned long setstatusupdatetime(
+
+  const char *value)  /* I */
+
+  {
+  return(0);
+  }
+
+u_long setjobdirectorysticky(
+
+  const char *value)  /* I */
+
+  {
+  int enable;
+
+  if ((enable = setbool(value)) != -1)
+    MOMJobDirStickySet = enable;
+
+  return(1);
+  }
+
+void reset_config_vars() {}
+
+u_long addclient(
+
+  const char *name)  /* I */
+
+  {
+  return(0);
+  }
+
+u_long setcudavisibledevices(
+
+  const char *value)  /* I */
+
+  {
+  return(0);
+  }
+
+unsigned long setdownonerror(
+
+  const char *value)  /* I */
+
+  {
+  return(0);
+  }
+
+unsigned long setcheckpolltime(
+
+  const char *value)  /* I */
+
+  {
+  return(0);
+  }
+
+int read_config(
+
+  char *file)  /* I */
+
+  {
+  return(0);
+  }
+
+void free_pwnam(struct passwd *pwdp, char *buf)
+  {}
+
+#ifdef ENABLE_PMIX
+#include <pmix_server.h>
+
+pmix_server_module_t psm;
+#endif
+
+int check_nvidia_setup()
+  {
+  return(1);
+  }
+
+int init_nvidia_nvml(unsigned int &count)
+ {
+ return(1);
+ }
+
+int shut_nvidia_nvml()
+  {
+  return(1);
+  }
+
+int post_stagedel(
+
+  job *pjob,  
+  int  exit_code)
+
+  {
+  return(PBSE_NONE);
+  }
+
+int post_stageout(
+
+  job *pjob,
+  int  exit_code)
+
+  {
+  return(PBSE_NONE);
+  }
+
+void delete_staged_in_files(
+
+  job   *pjob,
+  char  *home_dir,
+  char **bad_list)
+
+  {
+  }
+
+int send_back_std_and_staged_files(
+
+  job *pjob,
+  int  exit_status)
+
+  {
+  return(PBSE_NONE);
+  }
+
+const char *reqvarattr(struct rm_attribute *attrib)
+  {
+  return(NULL);
+  }
+
+int mkdir_wrapper(const char *path, mode_t mode)
+  {
+  return(0);
+  }
+
+bool authorized_hosts::is_authorized(unsigned long addr)
+  {
+  return(true);
+  }
+
+void authorized_hosts::list_authorized_hosts(std::string &output) {}
+
+void authorized_hosts::add_authorized_address(unsigned long addr, unsigned short port, const std::string &hostname) {}
+
+authorized_hosts::authorized_hosts() {}
+authorized_hosts auth_hosts;
